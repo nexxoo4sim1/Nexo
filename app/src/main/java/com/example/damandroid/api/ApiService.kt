@@ -13,6 +13,9 @@ interface ApiService {
     
     @POST("auth/forgot-password")
     suspend fun forgotPassword(@Body forgotPasswordDto: ForgotPasswordDto): Response<MessageResponse>
+
+    @POST("auth/send-verification-email")
+    suspend fun sendVerificationEmail(@Body verificationEmailDto: VerificationEmailDto): Response<MessageResponse>
     
     @POST("auth/reset-password")
     suspend fun resetPassword(@Body resetPasswordDto: ResetPasswordDto): Response<MessageResponse>
@@ -41,7 +44,8 @@ data class FacebookLoginDto(
 
 data class LoginDto(
     val email: String,
-    val password: String
+    val password: String,
+    val rememberMe: Boolean? = null
 )
 
 data class RegisterDto(
@@ -62,6 +66,10 @@ data class ResetPasswordDto(
 
 data class MessageResponse(
     val message: String
+)
+
+data class VerificationEmailDto(
+    val email: String
 )
 
 data class AuthResponse(

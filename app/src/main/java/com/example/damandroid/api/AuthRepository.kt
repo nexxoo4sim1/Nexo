@@ -2,6 +2,7 @@ package com.example.damandroid.api
 
 import android.content.Context
 import com.example.damandroid.auth.SocialPasswordStore
+import com.example.damandroid.auth.UserSession
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,9 +24,13 @@ class AuthRepository(context: Context) {
         data class Error(val message: String) : PasswordResetResult()
     }
     
-    suspend fun login(email: String, password: String): AuthResult = withContext(Dispatchers.IO) {
+    private fun storeSession(token: String?, user: UserDto?) {
+        UserSession.update(token, user)
+    }
+
+    suspend fun login(email: String, password: String, rememberMe: Boolean = false): AuthResult = withContext(Dispatchers.IO) {
         try {
-            val response = apiService.login(LoginDto(email, password))
+            val response = apiService.login(LoginDto(email, password, rememberMe))
             android.util.Log.d("AuthRepository", "Response code: ${response.code()}")
             
             if (response.isSuccessful) {
@@ -43,11 +48,13 @@ class AuthRepository(context: Context) {
                 val token = authResponse?.access_token ?: authResponse?.token
                 
                 if (token != null) {
+                    storeSession(token, authResponse?.user)
                     AuthResult.Success(token, authResponse?.user)
                 } else if (rawBodyString != null) {
                     // If parsed response doesn't have token, try to extract from raw JSON
                     val tokenFromRaw = extractTokenFromJson(rawBodyString)
                     if (tokenFromRaw != null) {
+                        storeSession(tokenFromRaw, authResponse?.user)
                         AuthResult.Success(tokenFromRaw, authResponse?.user)
                     } else {
                         AuthResult.Error("Token not found in response. Raw: $rawBodyString")
@@ -104,6 +111,7 @@ class AuthRepository(context: Context) {
                     // Registration successful - return success without token (user needs to login)
                     // Return empty token to indicate registration-only (no auto-login)
                     android.util.Log.d("AuthRepository", "Registration successful")
+                    storeSession("", userDto)
                     AuthResult.Success("", userDto)
                 } else {
                     AuthResult.Error("Registration response is null")
@@ -183,6 +191,34 @@ class AuthRepository(context: Context) {
             PasswordResetResult.Error("Unexpected error: ${e.message}")
         }
     }
+
+    suspend fun sendVerificationEmail(email: String): PasswordResetResult = withContext(Dispatchers.IO) {
+        try {
+            val response = apiService.sendVerificationEmail(VerificationEmailDto(email))
+            android.util.Log.d("AuthRepository", "Send verification response code: ${response.code()}")
+
+            if (response.isSuccessful) {
+                val message = response.body()?.message ?: "Verification email sent"
+                PasswordResetResult.Success(message)
+            } else {
+                val errorBody = response.errorBody()?.string()
+                android.util.Log.e("AuthRepository", "Send verification error: ${response.code()} - $errorBody")
+                val errorMessage = parseError(response.code(), errorBody)
+                PasswordResetResult.Error(errorMessage)
+            }
+        } catch (e: HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            android.util.Log.e("AuthRepository", "HttpException send verification: ${e.code()} - $errorBody")
+            val errorMessage = parseError(e.code(), errorBody)
+            PasswordResetResult.Error(errorMessage)
+        } catch (e: IOException) {
+            android.util.Log.e("AuthRepository", "IOException send verification: ${e.message}")
+            PasswordResetResult.Error("Network error: ${e.message}")
+        } catch (e: Exception) {
+            android.util.Log.e("AuthRepository", "Exception send verification: ${e.message}", e)
+            PasswordResetResult.Error("Unexpected error: ${e.message}")
+        }
+    }
     
     suspend fun resetPassword(token: String, password: String): PasswordResetResult = withContext(Dispatchers.IO) {
         try {
@@ -245,10 +281,12 @@ class AuthRepository(context: Context) {
                     val token = authResponse?.access_token ?: authResponse?.token
                     
                     if (token != null) {
+                        storeSession(token, authResponse?.user)
                         return@withContext AuthResult.Success(token, authResponse?.user)
                     } else if (rawBodyString != null) {
                         val tokenFromRaw = extractTokenFromJson(rawBodyString)
                         if (tokenFromRaw != null) {
+                            storeSession(tokenFromRaw, authResponse?.user)
                             return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                         }
                     }
@@ -315,12 +353,13 @@ class AuthRepository(context: Context) {
                     val token = authResponse?.access_token ?: authResponse?.token
                     
                     if (token != null) {
-                        socialPasswordStore.savePassword("google", email, fallbackPassword)
+                        storeSession(token, authResponse?.user)
                         android.util.Log.d("AuthRepository", "Google user logged in successfully with token")
                         return@withContext AuthResult.Success(token, authResponse?.user)
                     } else if (rawBodyString != null) {
                         val tokenFromRaw = extractTokenFromJson(rawBodyString)
                         if (tokenFromRaw != null) {
+                            storeSession(tokenFromRaw, authResponse?.user)
                             return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                         }
                     }
@@ -336,6 +375,7 @@ class AuthRepository(context: Context) {
                         location = registerResult.location
                     )
                     android.util.Log.w("AuthRepository", "User created but login failed. User needs to set a password.")
+                    storeSession("", userDto)
                     return@withContext AuthResult.Success("", userDto) // Token vide mais utilisateur créé
                 }
             } else {
@@ -360,11 +400,13 @@ class AuthRepository(context: Context) {
 
                         if (token != null) {
                             socialPasswordStore.savePassword("google", email, fallbackPassword)
+                            storeSession(token, authResponse?.user)
                             return@withContext AuthResult.Success(token, authResponse?.user)
                         } else if (rawBodyString != null) {
                             val tokenFromRaw = extractTokenFromJson(rawBodyString)
                             if (tokenFromRaw != null) {
                                 socialPasswordStore.savePassword("google", email, fallbackPassword)
+                                storeSession(tokenFromRaw, authResponse?.user)
                                 return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                             }
                         }
@@ -433,10 +475,12 @@ class AuthRepository(context: Context) {
                     val token = authResponse?.access_token ?: authResponse?.token
                     
                     if (token != null) {
+                        storeSession(token, authResponse?.user)
                         return@withContext AuthResult.Success(token, authResponse?.user)
                     } else if (rawBodyString != null) {
                         val tokenFromRaw = extractTokenFromJson(rawBodyString)
                         if (tokenFromRaw != null) {
+                            storeSession(tokenFromRaw, authResponse?.user)
                             return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                         }
                     }
@@ -503,12 +547,13 @@ class AuthRepository(context: Context) {
                     val token = authResponse?.access_token ?: authResponse?.token
                     
                     if (token != null) {
-                        socialPasswordStore.savePassword("facebook", email, fallbackPassword)
+                        storeSession(token, authResponse?.user)
                         android.util.Log.d("AuthRepository", "Facebook user logged in successfully with token")
                         return@withContext AuthResult.Success(token, authResponse?.user)
                     } else if (rawBodyString != null) {
                         val tokenFromRaw = extractTokenFromJson(rawBodyString)
                         if (tokenFromRaw != null) {
+                            storeSession(tokenFromRaw, authResponse?.user)
                             return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                         }
                     }
@@ -524,6 +569,7 @@ class AuthRepository(context: Context) {
                         location = registerResult.location
                     )
                     android.util.Log.w("AuthRepository", "User created but login failed. User needs to set a password.")
+                    storeSession("", userDto)
                     return@withContext AuthResult.Success("", userDto) // Token vide mais utilisateur créé
                 }
             } else {
@@ -548,11 +594,13 @@ class AuthRepository(context: Context) {
 
                         if (token != null) {
                             socialPasswordStore.savePassword("facebook", email, fallbackPassword)
+                            storeSession(token, authResponse?.user)
                             return@withContext AuthResult.Success(token, authResponse?.user)
                         } else if (rawBodyString != null) {
                             val tokenFromRaw = extractTokenFromJson(rawBodyString)
                             if (tokenFromRaw != null) {
                                 socialPasswordStore.savePassword("facebook", email, fallbackPassword)
+                                storeSession(tokenFromRaw, authResponse?.user)
                                 return@withContext AuthResult.Success(tokenFromRaw, authResponse?.user)
                             }
                         }

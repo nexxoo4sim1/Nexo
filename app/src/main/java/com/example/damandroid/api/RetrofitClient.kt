@@ -36,6 +36,7 @@ object RetrofitClient {
         .build()
     
     val apiService: ApiService = retrofit.create(ApiService::class.java)
+    val userApiService: UserApiService = retrofit.create(UserApiService::class.java)
     
     // OpenWeather API client
     private val openWeatherRetrofit: Retrofit = Retrofit.Builder()

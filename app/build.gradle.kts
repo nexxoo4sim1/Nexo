@@ -67,7 +67,9 @@ dependencies {
     
     // Facebook Login
     implementation("com.facebook.android:facebook-login:16.2.0")
-    
+    implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.foundation)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
