@@ -75,7 +75,6 @@ import com.example.damandroid.presentation.quickmatch.viewmodel.QuickMatchViewMo
 import com.example.damandroid.ui.theme.LocalThemeController
 import kotlinx.coroutines.delay
 import kotlin.math.abs
-import kotlin.random.Random
 
 @Composable
 fun QuickMatchRoute(
@@ -86,6 +85,7 @@ fun QuickMatchRoute(
     val uiState by viewModel.uiState.collectAsState()
     QuickMatchScreen(
         state = uiState,
+        viewModel = viewModel,
         onBack = onBack,
         modifier = modifier
     )
@@ -94,6 +94,7 @@ fun QuickMatchRoute(
 @Composable
 fun QuickMatchScreen(
     state: QuickMatchUiState,
+    viewModel: QuickMatchViewModel,
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
@@ -102,6 +103,7 @@ fun QuickMatchScreen(
         state.error != null -> ErrorState(state.error, modifier)
         else -> QuickMatchContent(
             profiles = state.profiles,
+            viewModel = viewModel,
             onBack = onBack,
             modifier = modifier
         )
@@ -125,15 +127,16 @@ private fun ErrorState(message: String, modifier: Modifier) {
 @Composable
 private fun QuickMatchContent(
     profiles: List<MatchUserProfile>,
+    viewModel: QuickMatchViewModel,
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     val colors = rememberQuickMatchThemeColors()
 
-    val displayedProfiles = if (profiles.isNotEmpty()) profiles else sampleQuickMatchProfiles
+    // Utiliser uniquement les profils de l'API (pas de données mockées)
+    val displayedProfiles = profiles
 
     var currentIndex by remember(displayedProfiles) { mutableStateOf(0) }
-    var matches by remember { mutableStateOf(setOf<String>()) }
     var showMatch by remember { mutableStateOf(false) }
     var matchedUser by remember { mutableStateOf<MatchUserProfile?>(null) }
 
@@ -147,7 +150,6 @@ private fun QuickMatchContent(
 
     LaunchedEffect(displayedProfiles) {
         currentIndex = 0
-        matches = emptySet()
         showMatch = false
         matchedUser = null
     }
@@ -166,7 +168,7 @@ private fun QuickMatchContent(
                 AllCaughtUpScreen(onBack = { onBack?.invoke() }, colors = colors)
             currentProfile != null -> {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    MatchHeader(matchesCount = matches.size, onBack = { onBack?.invoke() }, colors = colors)
+                    MatchHeader(matchesCount = 0, onBack = { onBack?.invoke() }, colors = colors)
 
                     Box(
                         modifier = Modifier
@@ -192,12 +194,16 @@ private fun QuickMatchContent(
                             modifier = Modifier.zIndex(1000f)
                         ) { direction ->
                             when (direction) {
-                                SwipeDirection.LEFT -> currentIndex++
+                                SwipeDirection.LEFT -> {
+                                    // Passer le profil (swipe left)
+                                    viewModel.passProfile(currentProfile.id)
+                                    currentIndex++
+                                }
                                 SwipeDirection.RIGHT -> {
-                                    val isMatch = Random.nextBoolean()
-                                    if (isMatch) {
-                                        matches = matches + currentProfile.id
-                                        matchedUser = currentProfile
+                                    // Liker le profil (swipe right)
+                                    viewModel.likeProfile(currentProfile.id) { matchedProfile ->
+                                        // Si c'est un match, afficher le modal
+                                        matchedUser = matchedProfile
                                         showMatch = true
                                     }
                                     currentIndex++
@@ -208,19 +214,23 @@ private fun QuickMatchContent(
 
                     ActionButtons(
                         onLike = {
-                            currentProfile.let { profile ->
-                                if (profile != null) {
-                                    val isMatch = Random.nextBoolean()
-                                    if (isMatch) {
-                                        matches = matches + profile.id
-                                        matchedUser = profile
-                                        showMatch = true
-                                    }
+                            currentProfile?.let { profile ->
+                                // Liker le profil
+                                viewModel.likeProfile(profile.id) { matchedProfile ->
+                                    // Si c'est un match, afficher le modal
+                                    matchedUser = matchedProfile
+                                    showMatch = true
                                 }
                                 currentIndex++
                             }
                         },
-                        onPass = { currentIndex++ },
+                        onPass = {
+                            currentProfile?.let { profile ->
+                                // Passer le profil
+                                viewModel.passProfile(profile.id)
+                                currentIndex++
+                            }
+                        },
                         colors = colors,
                         modifier = Modifier
                             .padding(bottom = 70.dp)

@@ -4,5 +4,6 @@ import com.example.damandroid.data.model.HomeFeedDto
 
 interface HomeFeedRemoteDataSource {
     suspend fun fetchHomeFeed(): HomeFeedDto
+    suspend fun fetchMyActivities(): HomeFeedDto
 }
 

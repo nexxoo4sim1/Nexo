@@ -14,6 +14,19 @@ class HomeFeedRepositoryImpl(
 
     override suspend fun getHomeFeed(): HomeFeed = fetchAndCacheFeed()
 
+    override suspend fun getMyActivities(): HomeFeed {
+        val dto = remoteDataSource.fetchMyActivities()
+        // Persist any server-side saved state into local memory
+        dto.activities.filter { it.isSaved }.forEach { savedActivities.add(it.id) }
+
+        val mergedDto = dto.copy(
+            activities = dto.activities.map { activity ->
+                activity.copy(isSaved = savedActivities.contains(activity.id))
+            }
+        )
+        return mergedDto.toDomain()
+    }
+
     override suspend fun toggleSaved(activityId: String): HomeFeed {
         if (!savedActivities.add(activityId)) {
             savedActivities.remove(activityId)

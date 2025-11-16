@@ -48,6 +48,19 @@ sealed class NotificationItem(
         override val timestamp: OffsetDateTime,
         override val isRead: Boolean
     ) : NotificationItem(id, title, message, timestamp, isRead)
+
+    data class LikeNotification(
+        override val id: String,
+        override val title: String,
+        override val message: String,
+        override val timestamp: OffsetDateTime,
+        override val isRead: Boolean,
+        val fromUserId: String,
+        val fromUserName: String,
+        val fromUserAvatar: String?,
+        val isMatch: Boolean, // true si l'utilisateur a déjà liké ce profil en retour
+        val matchId: String? // ID du match si c'est un match
+    ) : NotificationItem(id, title, message, timestamp, isRead)
 }
 
 data class NotificationsOverview(

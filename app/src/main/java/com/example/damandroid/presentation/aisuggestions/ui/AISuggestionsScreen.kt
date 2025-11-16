@@ -81,6 +81,19 @@ import com.example.damandroid.presentation.aisuggestions.viewmodel.AISuggestions
 import com.example.damandroid.ui.theme.AppThemeColors
 import com.example.damandroid.ui.theme.LocalThemeController
 import com.example.damandroid.ui.theme.rememberAppThemeColors
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import com.example.damandroid.location.LocationService
+import com.example.damandroid.location.GeocodingService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun AISuggestionsRoute(
@@ -151,14 +164,145 @@ private fun LegacySessionsContent(
     val appTheme = rememberAppThemeColors(LocalThemeController.current.isDarkMode)
     var savedActivities by remember { mutableStateOf(setOf<String>()) }
     var viewMode by remember { mutableStateOf("list") }
+    val context = LocalContext.current
+    val locationService = remember { LocationService(context) }
+    val geocodingService = remember { GeocodingService() }
+    val coroutineScope = rememberCoroutineScope()
+    var userLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var activitiesWithLocation by remember { mutableStateOf<List<SuggestedActivity>>(emptyList()) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    var maxDistanceKm by remember { mutableStateOf(50.0) }
 
     val toggleSave = { id: String ->
         savedActivities = if (savedActivities.contains(id)) savedActivities - id else savedActivities + id
     }
 
-    val fallbackActivities = remember { sampleActivities }
-    val displayedActivities = remember(recommendation, viewMode) {
-        recommendation.recommended.ifEmpty { fallbackActivities }
+    // Launcher pour demander les permissions de localisation
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        
+        if (fineLocationGranted || coarseLocationGranted) {
+            coroutineScope.launch {
+                userLocation = withContext(Dispatchers.IO) {
+                    locationService.getCurrentLocation()
+                }
+            }
+        } else {
+            showPermissionDialog = true
+        }
+    }
+    
+    // Vérifier les permissions au démarrage
+    LaunchedEffect(Unit) {
+        if (!locationService.hasLocationPermission()) {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        } else {
+            userLocation = withContext(Dispatchers.IO) {
+                locationService.getCurrentLocation()
+            }
+        }
+    }
+    
+    // Fonction helper pour extraire les coordonnées depuis la location string
+    fun extractCoordinatesFromLocation(location: String): Pair<Double?, Double?> {
+        val parts = location.split(",")
+        if (parts.size >= 3) {
+            try {
+                val lat = parts[parts.size - 2].trim().toDoubleOrNull()
+                val lng = parts[parts.size - 1].trim().toDoubleOrNull()
+                if (lat != null && lng != null) {
+                    return Pair(lat, lng)
+                }
+            } catch (e: Exception) {
+                // Ignorer
+            }
+        }
+        return Pair(null, null)
+    }
+    
+    // Récupérer les activités depuis l'API avec latitude/longitude
+    LaunchedEffect(Unit) {
+        activitiesWithLocation = withContext(Dispatchers.IO) {
+            try {
+                val response = com.example.damandroid.api.RetrofitClient.activityApiService.getActivities(visibility = "public")
+                if (response.isSuccessful) {
+                    val apiActivities = response.body() ?: emptyList()
+                    
+                    // Convertir ActivityResponse en SuggestedActivity avec coordonnées
+                    apiActivities.mapNotNull { activityResponse ->
+                        var lat = activityResponse.latitude
+                        var lng = activityResponse.longitude
+                        
+                        // Si pas de coordonnées, essayer de géocoder l'adresse
+                        if (lat == null || lng == null) {
+                            val geocoded = geocodingService.geocode(activityResponse.location)
+                            if (geocoded != null) {
+                                lat = geocoded.first
+                                lng = geocoded.second
+                            }
+                        }
+                        
+                        if (lat != null && lng != null) {
+                            SuggestedActivity(
+                                id = activityResponse.getActivityId(),
+                                title = activityResponse.title,
+                                sport = activityResponse.sportType,
+                                description = activityResponse.description ?: "",
+                                date = activityResponse.date,
+                                time = activityResponse.time,
+                                location = "${activityResponse.location}, $lat, $lng",
+                                organizer = activityResponse.getCreator()?.name ?: "Unknown",
+                                participantsCount = 0,
+                                capacity = activityResponse.participants,
+                                isRecommended = false
+                            )
+                        } else null
+                    }
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("LegacySessionsContent", "Error fetching activities: ${e.message}")
+                emptyList()
+            }
+        }
+    }
+    
+    // Filtrer par distance quand la localisation de l'utilisateur est disponible
+    val filteredActivities = remember(activitiesWithLocation, userLocation, maxDistanceKm) {
+        if (userLocation != null && activitiesWithLocation.isNotEmpty()) {
+            val (userLat, userLng) = userLocation!!
+            activitiesWithLocation.filter { activity ->
+                val (activityLat, activityLng) = extractCoordinatesFromLocation(activity.location)
+                if (activityLat != null && activityLng != null) {
+                    val distance = geocodingService.calculateDistance(
+                        userLat, userLng,
+                        activityLat, activityLng
+                    )
+                    distance <= maxDistanceKm
+                } else false
+            }
+        } else {
+            activitiesWithLocation
+        }
+    }
+    
+    // Utiliser les activités de l'API si disponibles, sinon utiliser celles de la recommandation
+    val displayedActivities = remember(filteredActivities, recommendation) {
+        when {
+            filteredActivities.isNotEmpty() -> filteredActivities
+            activitiesWithLocation.isNotEmpty() -> activitiesWithLocation
+            recommendation.recommended.isNotEmpty() -> recommendation.recommended
+            else -> sampleActivities
+        }
     }
 
     Box(
@@ -197,7 +341,7 @@ private fun LegacySessionsContent(
                     }
                 }
             } else {
-                MapViewLegacy(
+                RealMapView(
                     activities = displayedActivities,
                     onActivityClick = { onActivityClick?.invoke(it) },
                     theme = appTheme,
@@ -206,7 +350,38 @@ private fun LegacySessionsContent(
             }
         }
     }
+    
+    // Dialog pour demander les permissions
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            title = { Text("Permission de localisation requise") },
+            text = { Text("Pour afficher votre position et les activités proches, nous avons besoin de votre permission de localisation.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPermissionDialog = false
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                ) {
+                    Text("Autoriser")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    Text("Annuler")
+                }
+            }
+        )
+    }
 }
+
+private fun Box(modifier: Modifier, content: () -> Unit) {}
 
 // region Legacy UI
 
@@ -625,6 +800,186 @@ private fun ActivitySuggestionCard(
             }
         }
     }
+}
+
+@Composable
+private fun RealMapView(
+    activities: List<SuggestedActivity>,
+    onActivityClick: (SuggestedActivity) -> Unit,
+    theme: AppThemeColors,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val locationService = remember { LocationService(context) }
+    val geocodingService = remember { GeocodingService() }
+    val coroutineScope = rememberCoroutineScope()
+    var userLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var activitiesWithLocation by remember { mutableStateOf<List<SuggestedActivity>>(emptyList()) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    var maxDistanceKm by remember { mutableStateOf(50.0) } // Distance maximale en km
+    
+    // Launcher pour demander les permissions de localisation
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        
+        if (fineLocationGranted || coarseLocationGranted) {
+            // Permissions accordées, récupérer la localisation
+            coroutineScope.launch {
+                userLocation = withContext(Dispatchers.IO) {
+                    locationService.getCurrentLocation()
+                }
+            }
+        } else {
+            showPermissionDialog = true
+        }
+    }
+    
+    // Vérifier les permissions au démarrage
+    LaunchedEffect(Unit) {
+        if (!locationService.hasLocationPermission()) {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        } else {
+            userLocation = withContext(Dispatchers.IO) {
+                locationService.getCurrentLocation()
+            }
+        }
+    }
+    
+    // Fonction helper pour extraire les coordonnées depuis la location string
+    fun extractCoordinatesFromLocation(location: String): Pair<Double?, Double?> {
+        val parts = location.split(",")
+        if (parts.size >= 3) {
+            try {
+                val lat = parts[parts.size - 2].trim().toDoubleOrNull()
+                val lng = parts[parts.size - 1].trim().toDoubleOrNull()
+                if (lat != null && lng != null) {
+                    return Pair(lat, lng)
+                }
+            } catch (e: Exception) {
+                // Ignorer
+            }
+        }
+        return Pair(null, null)
+    }
+    
+    // Récupérer les activités depuis l'API avec latitude/longitude
+    LaunchedEffect(Unit) {
+        activitiesWithLocation = withContext(Dispatchers.IO) {
+            try {
+                val response = com.example.damandroid.api.RetrofitClient.activityApiService.getActivities(visibility = "public")
+                if (response.isSuccessful) {
+                    val apiActivities = response.body() ?: emptyList()
+                    
+                    // Convertir ActivityResponse en SuggestedActivity avec coordonnées
+                    apiActivities.mapNotNull { activityResponse ->
+                        var lat = activityResponse.latitude
+                        var lng = activityResponse.longitude
+                        
+                        // Si pas de coordonnées, essayer de géocoder l'adresse
+                        if (lat == null || lng == null) {
+                            val geocoded = geocodingService.geocode(activityResponse.location)
+                            if (geocoded != null) {
+                                lat = geocoded.first
+                                lng = geocoded.second
+                            }
+                        }
+                        
+                        if (lat != null && lng != null) {
+                            SuggestedActivity(
+                                id = activityResponse.getActivityId(),
+                                title = activityResponse.title,
+                                sport = activityResponse.sportType,
+                                description = activityResponse.description ?: "",
+                                date = activityResponse.date,
+                                time = activityResponse.time,
+                                location = "${activityResponse.location}, $lat, $lng",
+                                organizer = activityResponse.getCreator()?.name ?: "Unknown",
+                                participantsCount = 0,
+                                capacity = activityResponse.participants,
+                                isRecommended = false
+                            )
+                        } else null
+                    }
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("RealMapView", "Error fetching activities: ${e.message}")
+                emptyList()
+            }
+        }
+    }
+    
+    // Filtrer par distance quand la localisation de l'utilisateur est disponible
+    val filteredActivities = remember(activitiesWithLocation, userLocation, maxDistanceKm) {
+        if (userLocation != null && activitiesWithLocation.isNotEmpty()) {
+            val (userLat, userLng) = userLocation!!
+            activitiesWithLocation.filter { activity ->
+                val (activityLat, activityLng) = extractCoordinatesFromLocation(activity.location)
+                if (activityLat != null && activityLng != null) {
+                    val distance = geocodingService.calculateDistance(
+                        userLat, userLng,
+                        activityLat, activityLng
+                    )
+                    distance <= maxDistanceKm
+                } else false
+            }
+        } else {
+            activitiesWithLocation
+        }
+    }
+    
+    // Utiliser les activités filtrées de l'API si disponibles, sinon utiliser celles passées en paramètre
+    val activitiesToShow = when {
+        filteredActivities.isNotEmpty() -> filteredActivities
+        activitiesWithLocation.isNotEmpty() -> activitiesWithLocation
+        else -> activities
+    }
+    
+    // Dialog pour demander les permissions
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            title = { androidx.compose.material3.Text("Permission de localisation requise") },
+            text = { androidx.compose.material3.Text("Pour afficher votre position et les activités proches, nous avons besoin de votre permission de localisation.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPermissionDialog = false
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                ) {
+                    androidx.compose.material3.Text("Autoriser")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    androidx.compose.material3.Text("Annuler")
+                }
+            }
+        )
+    }
+    
+    OSMMapView(
+        activities = activitiesToShow,
+        userLatitude = userLocation?.first,
+        userLongitude = userLocation?.second,
+        onActivityClick = onActivityClick,
+        modifier = modifier
+    )
 }
 
 @Composable

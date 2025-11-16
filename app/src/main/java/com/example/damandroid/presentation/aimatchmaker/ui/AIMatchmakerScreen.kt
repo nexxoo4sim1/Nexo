@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -135,6 +136,7 @@ fun AIMatchmakerRoute(
         state = uiState,
         onBack = onBack,
         onRefresh = onRefresh ?: viewModel::refresh,
+        onSendMessage = viewModel::sendMessage,
         onJoinActivity = onJoinActivity,
         onViewProfile = onViewProfile,
         modifier = modifier
@@ -146,6 +148,7 @@ fun AIMatchmakerScreen(
     state: AIMatchmakerUiState,
     onBack: (() -> Unit)? = null,
     onRefresh: () -> Unit,
+    onSendMessage: (String) -> Unit,
     onJoinActivity: ((MatchmakerProfile) -> Unit)? = null,
     onViewProfile: ((MatchmakerProfile) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -156,6 +159,9 @@ fun AIMatchmakerScreen(
         else -> LegacyAIMatchmaker(
             modifier = modifier,
             onBack = onBack,
+            conversationHistory = state.conversationHistory,
+            isSendingMessage = state.isSendingMessage,
+            onSendMessage = onSendMessage,
             onJoinActivity = { eventId ->
                 state.profiles.firstOrNull { it.id == eventId }?.let { profile ->
                     onJoinActivity?.invoke(profile)
@@ -195,6 +201,9 @@ private fun ErrorState(
 private fun LegacyAIMatchmaker(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)?,
+    conversationHistory: List<com.example.damandroid.presentation.aimatchmaker.model.ChatMessage>,
+    isSendingMessage: Boolean,
+    onSendMessage: (String) -> Unit,
     onJoinActivity: (String) -> Unit,
     onViewProfile: (String) -> Unit
 ) {
@@ -212,50 +221,66 @@ private fun LegacyAIMatchmaker(
         )
     }
 
-    var messages by remember {
-        mutableStateOf(
-            listOf(
-                Message(
-                    id = "1",
-                    type = MessageType.AI,
-                    text = "Hi! I'm your AI matchmaker. I can help you find the perfect sport partners or activities. What would you like to do today?",
-                    options = listOf(
-                        "Find a running partner",
-                        "Join a group activity",
-                        "Discover new sports"
-                    )
-                )
-            )
-        )
-    }
     var inputValue by remember { mutableStateOf("") }
-    var pendingOption by remember { mutableStateOf<String?>(null) }
-    var pendingUserInput by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(pendingOption) {
-        pendingOption?.let { option ->
-            delay(800)
-            val aiResponse = generateAIResponse(option)
-            messages = messages + aiResponse
-            pendingOption = null
-        }
-    }
-
-    LaunchedEffect(pendingUserInput) {
-        pendingUserInput?.let {
-            delay(800)
-            val aiResponse = Message(
-                id = (System.currentTimeMillis() + 1).toString(),
-                type = MessageType.AI,
-                text = "Let me find the best matches for you...",
-                options = listOf(
-                    "Show me runners nearby",
-                    "Find group activities",
-                    "Something else"
-                )
+    
+    // Convertir l'historique de conversation en messages pour l'affichage
+    val messages = remember(conversationHistory) {
+        conversationHistory.map { chatMsg ->
+            Message(
+                id = chatMsg.id,
+                type = if (chatMsg.role == com.example.damandroid.presentation.aimatchmaker.model.ChatRole.USER) MessageType.USER else MessageType.AI,
+                text = chatMsg.content,
+                options = chatMsg.options,
+                results = when {
+                    chatMsg.suggestedActivities != null && chatMsg.suggestedActivities.isNotEmpty() -> {
+                        MessageResults(
+                            type = ResultType.EVENTS,
+                            items = chatMsg.suggestedActivities.map { activity ->
+                                EventResult(
+                                    id = activity.id,
+                                    title = activity.title,
+                                    sportIcon = when (activity.sportType.lowercase()) {
+                                        "football", "soccer" -> "⚽"
+                                        "basketball" -> "🏀"
+                                        "running" -> "🏃"
+                                        "cycling" -> "🚴"
+                                        "tennis" -> "🎾"
+                                        "swimming" -> "🏊"
+                                        "yoga" -> "🧘"
+                                        "volleyball" -> "🏐"
+                                        else -> "🏃"
+                                    },
+                                    date = activity.date,
+                                    time = activity.time,
+                                    location = activity.location,
+                                    distance = "",
+                                    participants = activity.participants,
+                                    maxParticipants = activity.maxParticipants,
+                                    matchScore = activity.matchScore ?: 85
+                                )
+                            }
+                        )
+                    }
+                    chatMsg.suggestedUsers != null && chatMsg.suggestedUsers.isNotEmpty() -> {
+                        MessageResults(
+                            type = ResultType.PEOPLE,
+                            items = chatMsg.suggestedUsers.map { user ->
+                                PersonResult(
+                                    id = user.id,
+                                    name = user.name,
+                                    avatar = user.profileImageUrl ?: "https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}",
+                                    sport = user.sport,
+                                    distance = user.distance ?: "",
+                                    matchScore = user.matchScore ?: 85,
+                                    bio = user.bio ?: "",
+                                    availability = user.availability ?: ""
+                                )
+                            }
+                        )
+                    }
+                    else -> null
+                }
             )
-            messages = messages + aiResponse
-            pendingUserInput = null
         }
     }
 
@@ -415,13 +440,7 @@ private fun LegacyAIMatchmaker(
                         AIMessage(
                             message = message,
                             onOptionClick = { option ->
-                                val userMsg = Message(
-                                    id = System.currentTimeMillis().toString(),
-                                    type = MessageType.USER,
-                                    text = option
-                                )
-                                messages = messages + userMsg
-                                pendingOption = option
+                                onSendMessage(option)
                             },
                             onJoinActivity = onJoinActivity,
                             onViewProfile = onViewProfile,
@@ -429,6 +448,23 @@ private fun LegacyAIMatchmaker(
                         )
                     } else {
                         UserMessage(message, appColors = theme)
+                    }
+                }
+                
+                // Afficher un indicateur de chargement si un message est en cours d'envoi
+                if (isSendingMessage) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.Start
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = theme.accentPurple
+                            )
+                        }
                     }
                 }
             }
@@ -495,17 +531,12 @@ private fun LegacyAIMatchmaker(
                     )
                     IconButton(
                         onClick = {
-                            if (inputValue.isNotBlank()) {
-                                val userMsg = Message(
-                                    id = System.currentTimeMillis().toString(),
-                                    type = MessageType.USER,
-                                    text = inputValue
-                                )
-                                messages = messages + userMsg
-                                pendingUserInput = inputValue
+                            if (inputValue.isNotBlank() && !isSendingMessage) {
+                                onSendMessage(inputValue)
                                 inputValue = ""
                             }
                         },
+                        enabled = !isSendingMessage && inputValue.isNotBlank(),
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
@@ -613,33 +644,8 @@ private fun AIMessage(
                                 .fillMaxWidth()
                                 .padding(12.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                                    .background(
-                                        if (isDark) {
-                                            Brush.verticalGradient(
-                                                colors = listOf(
-                                                    appColors.glassSurface.copy(alpha = 0.45f),
-                                                    Color.Transparent
-                                                )
-                                            )
-                                        } else {
-                                            Brush.verticalGradient(
-                                                colors = listOf(
-                                                    Color.White.copy(alpha = 0.4f),
-                                                    Color.Transparent
-                                                )
-                                            )
-                                        }
-                                    )
-                                    .offset(y = (-12).dp)
-                            )
-
                             Text(
-                                text = body,
+                                text = sanitizeAiText(body),
                                 fontSize = 14.sp,
                                 color = appColors.primaryText,
                                 modifier = Modifier.padding(top = 4.dp)
@@ -650,9 +656,10 @@ private fun AIMessage(
             }
 
             message.options?.let { options ->
-                Row(
+                FlowRow(
                     modifier = Modifier.padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     options.forEach { option ->
                         Box {
@@ -968,7 +975,8 @@ private fun PersonResultCard(
                                     RoundedCornerShape(24.dp)
                                 )
                                 .border(2.dp, if (isDark) appColors.glassBorder else Color.White.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
-                                .padding(vertical = 8.dp)
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "View Profile",
@@ -997,7 +1005,8 @@ private fun PersonResultCard(
                                     ),
                                     RoundedCornerShape(24.dp)
                                 )
-                                .padding(vertical = 8.dp)
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "Connect",
@@ -1046,35 +1055,19 @@ private fun EventResultCard(
             border = BorderStroke(2.dp, cardBorder)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = 0.4f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                        .offset(y = (-12).dp)
-                )
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (isDark) appColors.glassSurface else Color.White.copy(alpha = 0.6f))
-                            .border(2.dp, if (isDark) appColors.glassBorder else Color.White.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isDark) appColors.glassSurface else Color.White.copy(alpha = 0.85f))
+                            .border(1.dp, if (isDark) appColors.glassBorder else Color.White.copy(alpha = 0.8f), RoundedCornerShape(12.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(text = event.sportIcon, fontSize = 18.sp)
+                        Text(text = event.sportIcon, fontSize = 16.sp)
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
@@ -1084,12 +1077,12 @@ private fun EventResultCard(
                         ) {
                             Text(
                                 text = event.title,
-                                fontSize = 15.sp,
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = primaryText
                             )
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = Color.Transparent,
                                 modifier = Modifier
                                     .background(
@@ -1099,28 +1092,28 @@ private fun EventResultCard(
                                                 Color(0xFFEC4899)
                                             )
                                         ),
-                                        RoundedCornerShape(12.dp)
+                                        RoundedCornerShape(10.dp)
                                     )
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
                                     text = "${event.matchScore}% match",
                                     fontSize = 10.sp,
                                     color = appColors.iconOnAccent,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 2.dp, vertical = 0.dp)
                                 )
                             }
                         }
 
                         Row(
-                            modifier = Modifier.padding(top = 4.dp),
+                            modifier = Modifier.padding(top = 2.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.DateRange,
                                 contentDescription = null,
-                                modifier = Modifier.size(14.dp),
+                                modifier = Modifier.size(13.dp),
                                 tint = mutedText
                             )
                             Text(
@@ -1138,7 +1131,7 @@ private fun EventResultCard(
                             Icon(
                                 imageVector = Icons.Default.LocationOn,
                                 contentDescription = null,
-                                modifier = Modifier.size(14.dp),
+                                modifier = Modifier.size(13.dp),
                                 tint = mutedText
                             )
                             Text(
@@ -1164,7 +1157,7 @@ private fun EventResultCard(
                         Icon(
                             imageVector = Icons.Default.Group,
                             contentDescription = null,
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(13.dp),
                             tint = appColors.secondaryText
                         )
                         Text(
@@ -1192,12 +1185,13 @@ private fun EventResultCard(
                                 ),
                                 RoundedCornerShape(24.dp)
                             )
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "Join Activity",
                             color = appColors.iconOnAccent,
-                            fontSize = 13.sp,
+                            fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -1207,88 +1201,25 @@ private fun EventResultCard(
     }
 }
 
-private fun generateAIResponse(option: String): Message {
-    return when {
-        option.contains("running partner", ignoreCase = true) -> {
-            Message(
-                id = System.currentTimeMillis().toString(),
-                type = MessageType.AI,
-                text = "Great! I found 3 runners near you who are free this evening. They match your pace and skill level.",
-                results = MessageResults(
-                    type = ResultType.PEOPLE,
-                    items = listOf(
-                        PersonResult(
-                            id = "1",
-                            name = "Sarah M.",
-                            avatar = "https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah",
-                            sport = "🏃 Running",
-                            distance = "0.8 mi away",
-                            matchScore = 95,
-                            bio = "Marathon runner, looking for morning run buddies",
-                            availability = "Free today 6PM"
-                        ),
-                        PersonResult(
-                            id = "2",
-                            name = "Mike R.",
-                            avatar = "https://api.dicebear.com/7.x/avataaars/svg?seed=Mike",
-                            sport = "🏃 Running",
-                            distance = "1.2 mi away",
-                            matchScore = 88,
-                            bio = "Trail running enthusiast",
-                            availability = "Free today 7PM"
-                        )
-                    )
-                )
-            )
+private fun sanitizeAiText(text: String): String {
+    // Remove explicit (ID: ...) fragments
+    var cleaned = text.replace(Regex("\\(ID:\\s*[^)]+\\)", RegexOption.IGNORE_CASE), "")
+    // Remove lines that expose IDs (FR/EN)
+    val filtered = cleaned
+        .lines()
+        .filterNot { line ->
+            val l = line.trim()
+            l.matches(Regex("(?i)^.*\\b(id|activity id|user id|id de l['’]?activit[eé]|id de l['’]?utilisateur)\\b\\s*[:：].*$"))
         }
-
-        option.contains("group activity", ignoreCase = true) -> {
-            Message(
-                id = System.currentTimeMillis().toString(),
-                type = MessageType.AI,
-                text = "I found some popular group activities happening near you this week:",
-                results = MessageResults(
-                    type = ResultType.EVENTS,
-                    items = listOf(
-                        EventResult(
-                            id = "event-1",
-                            title = "Beach Volleyball Meetup",
-                            sportIcon = "🏐",
-                            date = "Nov 5, 2025",
-                            time = "5:00 PM",
-                            location = "Venice Beach",
-                            distance = "2.1 mi",
-                            participants = 8,
-                            maxParticipants = 12,
-                            matchScore = 92
-                        ),
-                        EventResult(
-                            id = "event-2",
-                            title = "Morning Yoga Flow",
-                            sportIcon = "🧘",
-                            date = "Nov 6, 2025",
-                            time = "7:00 AM",
-                            location = "Sunset Park",
-                            distance = "1.5 mi",
-                            participants = 6,
-                            maxParticipants = 15,
-                            matchScore = 85
-                        )
-                    )
-                )
-            )
-        }
-
-        else -> {
-            Message(
-                id = System.currentTimeMillis().toString(),
-                type = MessageType.AI,
-                text = "Based on your profile, here are some sports you might enjoy:",
-                options = listOf("Swimming", "Tennis", "Cycling", "Yoga")
-            )
-        }
-    }
+    cleaned = filtered.joinToString("\n")
+    // Remove markdown bold markers and tidy whitespace
+    cleaned = cleaned.replace("**", "")
+        .replace(Regex(" +"), " ")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+    return cleaned
 }
+
 
 @Composable
 private fun AIMatchmakerOrb(

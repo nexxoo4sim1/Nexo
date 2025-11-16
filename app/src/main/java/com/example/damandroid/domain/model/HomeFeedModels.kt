@@ -12,6 +12,7 @@ data class HomeActivity(
     val sportIcon: String,
     val hostName: String,
     val hostAvatar: String,
+    val hostId: String? = null, // ID du créateur de l'activité
     val date: String,
     val time: String,
     val location: String,

@@ -18,6 +18,7 @@ import com.example.damandroid.presentation.notifications.ui.components.Notificat
 fun NotificationsRoute(
     viewModel: NotificationsViewModel,
     onBack: (() -> Unit)? = null,
+    onStartChat: ((String, String) -> Unit)? = null, // userId, userName
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -27,6 +28,13 @@ fun NotificationsRoute(
         onRefresh = viewModel::refresh,
         onNotificationRead = viewModel::onNotificationRead,
         onMarkAllRead = viewModel::onMarkAllRead,
+        onLikeBack = { profileId ->
+            viewModel.likeBack(profileId) {
+                // Callback appelé si c'est un match
+                // Le refresh mettra à jour l'UI pour afficher "Welcome" et "Chat"
+            }
+        },
+        onStartChat = onStartChat,
         modifier = modifier
     )
 }
@@ -38,6 +46,8 @@ fun NotificationsScreen(
     onRefresh: () -> Unit,
     onNotificationRead: (String) -> Unit,
     onMarkAllRead: () -> Unit,
+    onLikeBack: ((String) -> Unit)? = null,
+    onStartChat: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     when {
@@ -49,6 +59,8 @@ fun NotificationsScreen(
             onBack = onBack,
             onNotificationRead = onNotificationRead,
             onMarkAllRead = onMarkAllRead,
+            onLikeBack = onLikeBack,
+            onStartChat = onStartChat,
             modifier = modifier
         )
         else -> ErrorState(

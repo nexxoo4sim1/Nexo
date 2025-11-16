@@ -27,7 +27,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarToday
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
@@ -50,8 +49,21 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,14 +85,28 @@ import com.example.damandroid.presentation.createactivity.viewmodel.CreateActivi
 import com.example.damandroid.ui.theme.AppThemeColors
 import com.example.damandroid.ui.theme.LocalThemeController
 import com.example.damandroid.ui.theme.rememberAppThemeColors
+import com.example.damandroid.api.RetrofitClient
+import com.example.damandroid.api.CityLocation
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun CreateActivityRoute(
     viewModel: CreateActivityViewModel,
     onBack: () -> Unit,
+    onSuccess: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    
+    // Naviguer vers home quand la création réussit
+    LaunchedEffect(uiState.success) {
+        if (uiState.success != null) {
+            onSuccess()
+        }
+    }
+    
     CreateActivityScreen(
         state = uiState,
         onBack = onBack,
@@ -94,7 +120,6 @@ fun CreateActivityRoute(
         onSkillLevelChange = viewModel::onLevelSelected,
         onVisibilityChange = viewModel::onVisibilitySelected,
         onSubmit = viewModel::onSubmit,
-        onSuccessDismiss = viewModel::onSuccessDialogDismissed,
         modifier = modifier
     )
 }
@@ -113,13 +138,12 @@ fun CreateActivityScreen(
     onSkillLevelChange: (SkillLevel) -> Unit,
     onVisibilityChange: (ActivityVisibility) -> Unit,
     onSubmit: () -> Unit,
-    onSuccessDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when {
         state.isLoading -> LoadingState(modifier)
         state.error != null -> ErrorState(state.error, modifier)
-        else -> ContentState(state, onBack, onTitleChange, onDescriptionChange, onLocationChange, onDateChange, onTimeChange, onParticipantsChange, onSportSelected, onSkillLevelChange, onVisibilityChange, onSubmit, onSuccessDismiss, modifier)
+        else -> ContentState(state, onBack, onTitleChange, onDescriptionChange, onLocationChange, onDateChange, onTimeChange, onParticipantsChange, onSportSelected, onSkillLevelChange, onVisibilityChange, onSubmit, modifier)
     }
 }
 
@@ -151,7 +175,6 @@ private fun ContentState(
     onSkillLevelChange: (SkillLevel) -> Unit,
     onVisibilityChange: (ActivityVisibility) -> Unit,
     onSubmit: () -> Unit,
-    onSuccessDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val palette = rememberCreatePalette(rememberAppThemeColors(LocalThemeController.current.isDarkMode))
@@ -164,10 +187,6 @@ private fun ContentState(
             .fillMaxSize()
             .background(palette.background)
     ) {
-        state.success?.let { result ->
-            SuccessDialog(message = result.shareLink, palette = palette, onDismiss = onSuccessDismiss)
-        }
-
         Column(modifier = Modifier.fillMaxSize()) {
             Header(onBack = onBack, palette = palette)
 
@@ -208,7 +227,7 @@ private fun ContentState(
                     minLines = 4
                 )
 
-                ActivityTextField(
+                LocationAutoCompleteField(
                     value = state.location,
                     onValueChange = onLocationChange,
                     label = "Location *",
@@ -217,22 +236,20 @@ private fun ContentState(
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    ActivityTextField(
+                    DatePickerField(
                         value = state.date,
                         onValueChange = onDateChange,
                         label = "Date *",
                         placeholder = "Select date",
                         palette = palette,
-                        leadingIcon = { Icon(Icons.Default.CalendarToday, contentDescription = null, tint = palette.mutedText) },
                         modifier = Modifier.weight(1f)
                     )
-                    ActivityTextField(
+                    TimePickerField(
                         value = state.time,
                         onValueChange = onTimeChange,
                         label = "Time *",
                         placeholder = "Select time",
                         palette = palette,
-                        leadingIcon = { Icon(Icons.Default.Schedule, contentDescription = null, tint = palette.mutedText) },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -344,13 +361,15 @@ private fun ActivityTextField(
     palette: CreatePalette,
     minLines: Int = 1,
     modifier: Modifier = Modifier,
-    leadingIcon: (@Composable () -> Unit)? = null
+    leadingIcon: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = modifier) {
         FieldLabel(label, palette)
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             placeholder = { Text(placeholder, color = palette.mutedText) },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -359,6 +378,74 @@ private fun ActivityTextField(
             leadingIcon = leadingIcon,
             colors = textFieldColors(palette)
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocationAutoCompleteField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    palette: CreatePalette
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var suggestions by remember { mutableStateOf<List<CityLocation>>(emptyList()) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        FieldLabel(label, palette)
+        ExposedDropdownMenuBox(
+            expanded = expanded && suggestions.isNotEmpty(),
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = {
+                    onValueChange(it)
+                    expanded = it.length >= 2
+                    // debounce requests
+                    searchJob?.cancel()
+                    if (expanded) {
+                        searchJob = scope.launch {
+                            delay(250)
+                            runCatching {
+                                RetrofitClient.openWeatherService.searchCities(it, 5).body().orEmpty()
+                            }.onSuccess { list ->
+                                suggestions = list
+                            }.onFailure {
+                                suggestions = emptyList()
+                            }
+                        }
+                    } else {
+                        suggestions = emptyList()
+                    }
+                },
+                placeholder = { Text(placeholder, color = palette.mutedText) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+                shape = RoundedCornerShape(18.dp),
+                leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null, tint = palette.mutedText) },
+                colors = textFieldColors(palette)
+            )
+            ExposedDropdownMenu(
+                expanded = expanded && suggestions.isNotEmpty(),
+                onDismissRequest = { expanded = false }
+            ) {
+                suggestions.forEach { city ->
+                    DropdownMenuItem(
+                        text = { Text(city.getDisplayName(), color = palette.primaryText) },
+                        onClick = {
+                            onValueChange(city.getDisplayName())
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -495,32 +582,6 @@ private fun SubmitBar(onSubmit: () -> Unit, palette: CreatePalette) {
     }
 }
 
-@Composable
-private fun SuccessDialog(message: String, palette: CreatePalette, onDismiss: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f)),
-        color = Color.Transparent
-    ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = palette.cardSurface),
-                border = BorderStroke(1.dp, palette.glassBorder)
-            ) {
-                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = palette.accentPurple, modifier = Modifier.size(36.dp))
-                    Text(text = "Activity Created!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = palette.primaryText)
-                    Text(text = message, fontSize = 13.sp, color = palette.secondaryText, textAlign = TextAlign.Center)
-                    Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = palette.accentPurple)) {
-                        Text(text = "Got it", color = palette.iconOnAccent)
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun textFieldColors(palette: CreatePalette) = OutlinedTextFieldDefaults.colors(
@@ -566,6 +627,169 @@ private fun rememberCreatePalette(colors: AppThemeColors): CreatePalette {
         accentBlue = colors.accentBlue,
         sliderTrack = colors.subtleSurface
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    palette: CreatePalette,
+    modifier: Modifier = Modifier
+) {
+    var showDatePicker by remember { mutableStateOf(false) }
+    
+    // Parser la date actuelle si elle existe (mémorisé pour éviter les recalculs)
+    val currentDate = remember(value) {
+        try {
+            if (value.isNotBlank()) {
+                LocalDate.parse(value, DateTimeFormatter.ISO_DATE)
+            } else {
+                LocalDate.now()
+            }
+        } catch (e: Exception) {
+            LocalDate.now()
+        }
+    }
+    
+    // Formater la date pour l'affichage (format lisible) - mémorisé
+    val displayValue = remember(value) {
+        if (value.isNotBlank()) {
+            try {
+                val date = LocalDate.parse(value, DateTimeFormatter.ISO_DATE)
+                date.format(DateTimeFormatter.ofPattern("dd MMM yyyy"))
+            } catch (e: Exception) {
+                value
+            }
+        } else {
+            ""
+        }
+    }
+    
+    val datePickerState = rememberDatePickerState(
+        initialSelectedDateMillis = remember(currentDate) {
+            currentDate
+                .atStartOfDay(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        }
+    )
+    
+    ActivityTextField(
+        value = displayValue,
+        onValueChange = { },
+        label = label,
+        placeholder = placeholder,
+        palette = palette,
+        leadingIcon = { Icon(Icons.Default.CalendarToday, contentDescription = null, tint = palette.mutedText) },
+        modifier = modifier.clickable { showDatePicker = true },
+        enabled = false
+    )
+    
+    if (showDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val selectedDate = Instant.ofEpochMilli(millis)
+                                .atZone(ZoneId.systemDefault())
+                                .toLocalDate()
+                            onValueChange(selectedDate.format(DateTimeFormatter.ISO_DATE))
+                        }
+                        showDatePicker = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.accentPurple)
+                ) {
+                    Text("OK", color = palette.iconOnAccent)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDatePicker = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = palette.primaryText)
+                ) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    palette: CreatePalette,
+    modifier: Modifier = Modifier
+) {
+    var showTimePicker by remember { mutableStateOf(false) }
+    
+    // Parser l'heure actuelle si elle existe (mémorisé pour éviter les recalculs)
+    val currentTime = remember(value) {
+        try {
+            if (value.isNotBlank()) {
+                LocalTime.parse(value, DateTimeFormatter.ofPattern("HH:mm"))
+            } else {
+                LocalTime.now()
+            }
+        } catch (e: Exception) {
+            LocalTime.now()
+        }
+    }
+    
+    val timePickerState = rememberTimePickerState(
+        initialHour = remember(currentTime) { currentTime.hour },
+        initialMinute = remember(currentTime) { currentTime.minute },
+        is24Hour = true
+    )
+    
+    ActivityTextField(
+        value = value,
+        onValueChange = { },
+        label = label,
+        placeholder = placeholder,
+        palette = palette,
+        leadingIcon = { Icon(Icons.Default.Schedule, contentDescription = null, tint = palette.mutedText) },
+        modifier = modifier.clickable { showTimePicker = true },
+        enabled = false
+    )
+    
+    if (showTimePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showTimePicker = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val selectedTime = LocalTime.of(timePickerState.hour, timePickerState.minute)
+                        onValueChange(selectedTime.format(DateTimeFormatter.ofPattern("HH:mm")))
+                        showTimePicker = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.accentPurple)
+                ) {
+                    Text("OK", color = palette.iconOnAccent)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showTimePicker = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = palette.primaryText)
+                ) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            TimePicker(state = timePickerState)
+        }
+    }
 }
 
 // endregion

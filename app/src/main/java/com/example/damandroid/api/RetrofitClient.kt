@@ -16,8 +16,10 @@ object RetrofitClient {
     }
     
     private val responseBodyInterceptor = ResponseBodyInterceptor()
+    private val authInterceptor = AuthInterceptor()
     
     private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(authInterceptor) // Ajouter le token JWT automatiquement
         .addInterceptor(responseBodyInterceptor) // Add before logging to capture body
         .addInterceptor(loggingInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -27,6 +29,10 @@ object RetrofitClient {
     
     private val gson = GsonBuilder()
         .setLenient()
+        .registerTypeAdapter(ActivityResponse::class.java, ActivityResponseDeserializer())
+        .registerTypeAdapter(Chat::class.java, ChatDeserializer())
+        .registerTypeAdapter(ChatMessage::class.java, ChatMessageDeserializer())
+        .registerTypeAdapter(ChatListItem::class.java, ChatListItemDeserializer())
         .create()
     
     val retrofit: Retrofit = Retrofit.Builder()
@@ -37,6 +43,10 @@ object RetrofitClient {
     
     val apiService: ApiService = retrofit.create(ApiService::class.java)
     val userApiService: UserApiService = retrofit.create(UserApiService::class.java)
+    val chatApiService: ChatApiService = retrofit.create(ChatApiService::class.java)
+    val activityApiService: ActivityApiService = retrofit.create(ActivityApiService::class.java)
+    val quickMatchApiService: QuickMatchApiService = retrofit.create(QuickMatchApiService::class.java)
+    val aiMatchmakerApiService: AIMatchmakerApiService = retrofit.create(AIMatchmakerApiService::class.java)
     
     // OpenWeather API client
     private val openWeatherRetrofit: Retrofit = Retrofit.Builder()

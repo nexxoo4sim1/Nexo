@@ -24,6 +24,7 @@ import com.example.damandroid.ui.theme.DamAndroidTheme
 import com.example.damandroid.ui.theme.LocalThemeController
 import com.example.damandroid.ui.theme.ThemeController
 import com.example.damandroid.ui.theme.ThemePreferences
+import com.example.damandroid.api.RetrofitClient
 import com.example.damandroid.data.datasource.*
 import com.example.damandroid.data.repository.*
 import com.example.damandroid.domain.usecase.*
@@ -37,7 +38,12 @@ import com.example.damandroid.presentation.profile.viewmodel.ProfileViewModel
 import com.example.damandroid.presentation.settings.ui.SettingsRoute
 import com.example.damandroid.presentation.settings.viewmodel.SettingsViewModel
 import com.example.damandroid.presentation.chat.ui.ChatListRoute
+import com.example.damandroid.presentation.chat.ui.ChatRoute
+import com.example.damandroid.presentation.chat.ui.ParticipantsRoute
+import com.example.damandroid.presentation.chat.ui.UserSearchRoute
 import com.example.damandroid.presentation.chat.viewmodel.ChatListViewModel
+import com.example.damandroid.presentation.chat.viewmodel.ChatViewModel
+import com.example.damandroid.presentation.chat.viewmodel.UserSearchViewModel
 import com.example.damandroid.presentation.ai.ui.AICoachRoute
 import com.example.damandroid.presentation.ai.viewmodel.AICoachViewModel
 import com.example.damandroid.presentation.quickmatch.ui.QuickMatchRoute
@@ -203,7 +209,8 @@ fun MainHomeScreen(
         NotificationsViewModel(
             getNotifications = GetNotifications(notificationsRepository),
             markNotificationAsRead = MarkNotificationAsRead(notificationsRepository),
-            markAllNotificationsAsRead = MarkAllNotificationsAsRead(notificationsRepository)
+            markAllNotificationsAsRead = MarkAllNotificationsAsRead(notificationsRepository),
+            notificationsRepository = notificationsRepository
         )
     }
     val profileViewModel = remember {
@@ -227,10 +234,16 @@ fun MainHomeScreen(
         val repository = HomeFeedRepositoryImpl(remoteDataSource)
         HomeFeedViewModel(
             getHomeFeed = GetHomeFeed(repository),
+            getMyActivities = GetMyActivities(repository),
             toggleActivitySaved = ToggleActivitySaved(repository)
         )
     }
-    val chatRepository = remember { ChatRepositoryImpl(ChatRemoteDataSourceImpl()) }
+    val chatRepository = remember { 
+        ChatRepositoryImpl(
+            ChatRemoteDataSourceImpl(RetrofitClient.chatApiService)
+        ) 
+    }
+    val userSearchViewModel = remember { UserSearchViewModel(chatRepository) }
     val chatListViewModel = remember {
         ChatListViewModel(
             getChatPreviews = GetChatPreviews(chatRepository),
@@ -242,12 +255,19 @@ fun MainHomeScreen(
             getAICoachOverview = GetAICoachOverview(AICoachRepositoryImpl(AICoachRemoteDataSourceImpl()))
         )
     }
+    val quickMatchRepository = remember { QuickMatchRepositoryImpl(QuickMatchRemoteDataSourceImpl()) }
     val quickMatchViewModel = remember {
         QuickMatchViewModel(
-            getQuickMatchProfiles = GetQuickMatchProfiles(QuickMatchRepositoryImpl(QuickMatchRemoteDataSourceImpl()))
+            getQuickMatchProfiles = GetQuickMatchProfiles(quickMatchRepository),
+            likeProfileUseCase = LikeProfile(quickMatchRepository),
+            passProfileUseCase = PassProfile(quickMatchRepository)
         )
     }
-    val createActivityRepository = remember { CreateActivityRepositoryImpl(CreateActivityRemoteDataSourceImpl()) }
+    val createActivityRepository = remember { 
+        CreateActivityRepositoryImpl(
+            CreateActivityRemoteDataSourceImpl(RetrofitClient.activityApiService)
+        ) 
+    }
     val createActivityViewModel = remember {
         CreateActivityViewModel(
             getSportCategories = GetSportCategories(createActivityRepository),
@@ -271,9 +291,11 @@ fun MainHomeScreen(
             getEventDetails = GetEventDetails(EventDetailsRepositoryImpl(EventDetailsRemoteDataSourceImpl()))
         )
     }
+    val aiMatchmakerRepository = remember { com.example.damandroid.api.AIMatchmakerRepository() }
     val matchmakerViewModel = remember {
         AIMatchmakerViewModel(
-            getRecommendations = GetMatchmakerRecommendations(AIMatchmakerRepositoryImpl(AIMatchmakerRemoteDataSourceImpl()))
+            getRecommendations = GetMatchmakerRecommendations(AIMatchmakerRepositoryImpl(AIMatchmakerRemoteDataSourceImpl())),
+            aiMatchmakerRepository = aiMatchmakerRepository
         )
     }
     val sessionsViewModel = remember {
@@ -292,12 +314,23 @@ fun MainHomeScreen(
             OverlayScreen.CreateActivity -> CreateActivityRoute(
                 viewModel = createActivityViewModel,
                 onBack = { overlay = null },
+                onSuccess = {
+                    overlay = null
+                    activeTab = "home"
+                    // Recharger le feed pour afficher la nouvelle activité
+                    homeFeedViewModel.loadFeed()
+                    // Afficher le message de succès sur la page home
+                    homeFeedViewModel.showSuccessMessage("Activity created successfully!")
+                },
                 modifier = Modifier.fillMaxSize()
             )
             OverlayScreen.Discover -> DiscoverRoute(
                 viewModel = discoverViewModel,
                 onBack = { overlay = null },
                 onCoachClick = { coachId -> overlay = OverlayScreen.CoachProfile(coachId) },
+                onChatClick = { chatId, chatName, chatAvatar, isGroup ->
+                    overlay = OverlayScreen.Chat(chatId, chatName, chatAvatar, isGroup)
+                },
                 modifier = Modifier.fillMaxSize()
             )
             is OverlayScreen.CoachProfile -> CoachProfileRoute(
@@ -370,6 +403,80 @@ fun MainHomeScreen(
                 onBack = { overlay = null },
                 modifier = Modifier.fillMaxSize()
             )
+            is OverlayScreen.Chat -> {
+                val chatViewModel = remember(currentOverlay.chatId) {
+                    ChatViewModel(chatRepository, currentOverlay.chatId)
+                }
+                ChatRoute(
+                    viewModel = chatViewModel,
+                    chatName = currentOverlay.chatName,
+                    chatAvatar = currentOverlay.chatAvatar,
+                    chatId = currentOverlay.chatId,
+                    isGroup = currentOverlay.isGroup,
+                    onBack = { overlay = null },
+                    onViewParticipants = {
+                        overlay = OverlayScreen.ChatParticipants(
+                            chatId = currentOverlay.chatId,
+                            chatName = currentOverlay.chatName
+                        )
+                    },
+                    onLeaveGroup = {
+                        // Quitter le groupe et revenir à la liste des chats
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                            try {
+                                chatRepository.leaveGroup(currentOverlay.chatId)
+                                // Rafraîchir la liste des chats
+                                chatListViewModel.refresh()
+                                // Revenir à la liste des chats
+                                overlay = null
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "Error leaving group: ${e.message}", e)
+                                // Afficher une erreur ou un message à l'utilisateur
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            is OverlayScreen.ChatParticipants -> {
+                var activityId by remember { mutableStateOf<String?>(null) }
+                
+                // Récupérer l'activityId depuis le chat
+                LaunchedEffect(currentOverlay.chatId) {
+                    try {
+                        val chat = chatRepository.getChat(currentOverlay.chatId)
+                        activityId = chat.activityId
+                    } catch (e: Exception) {
+                        // En cas d'erreur, on continue sans activityId
+                        activityId = null
+                    }
+                }
+                
+                ParticipantsRoute(
+                    chatId = currentOverlay.chatId,
+                    chatName = currentOverlay.chatName,
+                    onGetParticipants = chatRepository::getParticipants,
+                    activityId = activityId,
+                    onBack = { overlay = null },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            OverlayScreen.UserSearch -> {
+                val userSearchViewModel = remember {
+                    UserSearchViewModel(chatRepository)
+                }
+                UserSearchRoute(
+                    viewModel = userSearchViewModel,
+                    onBack = { overlay = null },
+                    onChatCreated = { chatId ->
+                        // Find the chat to get its details
+                        overlay = null
+                        activeTab = "chat"
+                        // Optionally navigate to the chat
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             null -> when (activeTab) {
                 "home" -> HomeFeedRoute(
                     viewModel = homeFeedViewModel,
@@ -381,6 +488,17 @@ fun MainHomeScreen(
                     onEventDetailsClick = { eventId -> overlay = OverlayScreen.EventDetails(eventId) },
                     onCreateClick = { overlay = OverlayScreen.CreateActivity },
                     onNotificationsClick = { activeTab = "notifications" },
+                    onChatClick = { chatId, chatName, chatAvatar, isGroup ->
+                        // Naviguer directement vers le chat de groupe avec les informations fournies
+                        overlay = OverlayScreen.Chat(
+                            chatId = chatId,
+                            chatName = chatName,
+                            chatAvatar = chatAvatar,
+                            isGroup = isGroup
+                        )
+                        // Rafraîchir la liste des chats en arrière-plan pour qu'elle soit à jour
+                        chatListViewModel.refresh()
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
                 "map" -> AISuggestionsRoute(
@@ -390,12 +508,43 @@ fun MainHomeScreen(
                 )
                 "chat" -> ChatListRoute(
                     viewModel = chatListViewModel,
-                    onChatSelected = { /* TODO */ },
+                    onChatSelected = { chat ->
+                        overlay = OverlayScreen.Chat(
+                            chatId = chat.id,
+                            chatName = chat.name,
+                            chatAvatar = chat.avatarUrl,
+                            isGroup = chat.isGroup
+                        )
+                    },
+                    onNewChatClick = {
+                        overlay = OverlayScreen.UserSearch
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
                 "notifications" -> NotificationsRoute(
                     viewModel = notificationsViewModel,
                     onBack = { activeTab = "home" },
+                    onStartChat = { userId, userName ->
+                        // Créer un chat avec l'utilisateur et naviguer vers l'écran de chat
+                        // Utiliser LaunchedEffect pour gérer la création du chat de manière asynchrone
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                            try {
+                                val chatId = chatRepository.createChat(
+                                    com.example.damandroid.api.CreateChatRequest(
+                                        participantIds = listOf(userId)
+                                    )
+                                )
+                                overlay = OverlayScreen.Chat(
+                                    chatId = chatId,
+                                    chatName = userName,
+                                    chatAvatar = null,
+                                    isGroup = false
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "Error creating chat: ${e.message}", e)
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
                 "profile" -> ProfileRoute(
@@ -434,6 +583,17 @@ private sealed interface OverlayScreen {
     data object EditProfile : OverlayScreen
     data object ChangePassword : OverlayScreen
     data class ActivityRoom(val activity: HomeActivity) : OverlayScreen
+    data class Chat(
+        val chatId: String,
+        val chatName: String,
+        val chatAvatar: String?,
+        val isGroup: Boolean = false
+    ) : OverlayScreen
+    data class ChatParticipants(
+        val chatId: String,
+        val chatName: String
+    ) : OverlayScreen
+    data object UserSearch : OverlayScreen
 }
 
 @Composable

@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -101,6 +103,8 @@ fun HomeFeedContent(
     onEventDetailsClick: ((String) -> Unit)?,
     onCreateClick: (() -> Unit)?,
     onNotificationsClick: (() -> Unit)?,
+    onActivityTypeFilterChange: ((com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter) -> Unit)? = null,
+    onChatNowClick: ((HomeActivity) -> Unit)? = null,
     modifier: Modifier = Modifier,
     snackbarHost: @Composable () -> Unit
 ) {
@@ -148,8 +152,23 @@ fun HomeFeedContent(
     val usingSampleData = state.filteredActivities.isEmpty()
     var sampleSavedActivities by remember { mutableStateOf(setOf<String>()) }
     val baseActivities = if (usingSampleData) sampleHomeActivities else state.filteredActivities
+    
+    // Filtrer les activités selon le type sélectionné
+    // Note: Pour "Mine", les activités sont déjà filtrées côté backend via /activities/my-activities
+    // Donc on ne filtre pas à nouveau, on affiche directement toutes les activités retournées
+    val filteredByType = if (state.activityTypeFilter == com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.MINE) {
+        // Pour "Mine", les activités viennent déjà de /activities/my-activities, donc pas besoin de filtrer
+        baseActivities
+    } else {
+        getFilteredActivitiesByType(
+            activities = baseActivities,
+            filter = state.activityTypeFilter,
+            usingSampleData = usingSampleData
+        )
+    }
+    
     val displayedActivities = if (usingSampleData) {
-        baseActivities.map { activity ->
+        filteredByType.map { activity ->
             if (sampleSavedActivities.contains(activity.id)) {
                 activity.copy(isSaved = true)
             } else {
@@ -157,7 +176,7 @@ fun HomeFeedContent(
             }
         }
     } else {
-        baseActivities
+        filteredByType
     }
 
     Box(
@@ -283,6 +302,20 @@ fun HomeFeedContent(
                 }
             }
 
+            // Filtres d'activité (Mine, Coach, Individual)
+            item {
+                ActivityTypeFilterRow(
+                    selectedFilter = state.activityTypeFilter,
+                    onFilterChange = onActivityTypeFilterChange ?: {},
+                    appColors = appColors,
+                    cardSurface = cardSurface,
+                    cardBorder = cardBorder,
+                    titleColor = titleText,
+                    subtitleColor = subtitleText,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+            }
+
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -330,9 +363,13 @@ fun HomeFeedContent(
                 }
             }
 
-            items(displayedActivities, key = { it.id }) { activity ->
+            items(
+                items = displayedActivities,
+                key = { it.id }
+            ) { activity ->
                 ActivityCard(
                     activity = activity,
+                    activityType = state.activityTypeFilter,
                     appColors = appColors,
                     titleColor = titleText,
                     subtitleColor = subtitleText,
@@ -357,7 +394,8 @@ fun HomeFeedContent(
                         }
                     },
                     onActivityClick = { onActivityClick(activity) },
-                    onDetailsClick = { onEventDetailsClick?.invoke(activity.id) }
+                    onDetailsClick = { onEventDetailsClick?.invoke(activity.id) },
+                    onChatNowClick = onChatNowClick?.let { { it(activity) } }
                 )
             }
         }
@@ -887,6 +925,7 @@ private fun ExploreMoreCard(
 @Composable
 private fun ActivityCard(
     activity: HomeActivity,
+    activityType: com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter,
     appColors: AppThemeColors,
     titleColor: Color,
     subtitleColor: Color,
@@ -901,7 +940,8 @@ private fun ActivityCard(
     savedInactive: Color,
     onSaveToggle: () -> Unit,
     onActivityClick: () -> Unit,
-    onDetailsClick: () -> Unit
+    onDetailsClick: () -> Unit,
+    onChatNowClick: (() -> Unit)? = null
 ) {
     val spotsLeft = activity.spotsTotal - activity.spotsTaken
 
@@ -961,12 +1001,62 @@ private fun ActivityCard(
                         }
                     }
                     Column {
-                        Text(
-                            text = activity.hostName,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = titleColor
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(
+                                text = activity.hostName,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = titleColor
+                            )
+                            // Badge Coach ou Individual
+                            when (activityType) {
+                                com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.COACH -> {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = appColors.accentPurple,
+                                        modifier = Modifier.height(18.dp)
+                                    ) {
+                                        Text(
+                                            text = "Coach",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = appColors.iconOnAccent,
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .padding(horizontal = 6.dp)
+                                                .wrapContentHeight(Alignment.CenterVertically),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                                com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.INDIVIDUAL,
+                                com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.MINE -> {
+                                    // Pour Individual et Mine, afficher le badge Individual
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = appColors.accentBlue.copy(alpha = 0.2f),
+                                        border = BorderStroke(1.dp, appColors.accentBlue.copy(alpha = 0.3f)),
+                                        modifier = Modifier.height(18.dp)
+                                    ) {
+                                        Text(
+                                            text = "Individual",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = appColors.accentBlue,
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .padding(horizontal = 6.dp)
+                                                .wrapContentHeight(Alignment.CenterVertically),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1087,36 +1177,79 @@ private fun ActivityCard(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = onDetailsClick,
-                        shape = RoundedCornerShape(24.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = cardSurface
-                        ),
-                        border = BorderStroke(1.dp, cardBorder),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Text(
-                            text = "Details",
-                            fontSize = 13.sp,
-                            color = secondaryText
-                        )
-                    }
+                    // Pour Coach : toujours afficher "Details" et "Join"
+                    // Pour Individual : afficher "Chat Now" ou "Completed"
+                    if (activityType == com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.COACH) {
+                        OutlinedButton(
+                            onClick = onDetailsClick,
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = cardSurface
+                            ),
+                            border = BorderStroke(1.dp, cardBorder),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = "Details",
+                                fontSize = 13.sp,
+                                color = secondaryText
+                            )
+                        }
 
-                    Button(
-                        onClick = onActivityClick,
-                        shape = RoundedCornerShape(24.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = accentGreen
-                        ),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Text(
-                            text = "Join",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = appColors.iconOnAccent
-                        )
+                        Button(
+                            onClick = onActivityClick,
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accentGreen
+                            ),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = "Join",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = appColors.iconOnAccent
+                            )
+                        }
+                    } else {
+                        // Individual : vérifier si l'activité est complète
+                        val isActivityComplete = activity.spotsTaken >= activity.spotsTotal
+                        val chatNowCallback = onChatNowClick
+                        
+                        if (!isActivityComplete && chatNowCallback != null) {
+                            // Activité non complète : afficher "Chat Now"
+                            Button(
+                                onClick = { chatNowCallback() },
+                                shape = RoundedCornerShape(24.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = accentGreen
+                                ),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text(
+                                    text = "Chat Now",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = appColors.iconOnAccent
+                                )
+                            }
+                        } else if (isActivityComplete) {
+                            // Activité complète : afficher "Completed"
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = chipBackground,
+                                border = BorderStroke(1.dp, chipBorder),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text(
+                                    text = "Completed",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = secondaryText,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1220,6 +1353,154 @@ private fun FloatingCreateButton(
         }
     }
 }
+
+/**
+ * Filtrer les activités selon le type sélectionné
+ */
+@Composable
+private fun getFilteredActivitiesByType(
+    activities: List<HomeActivity>,
+    filter: com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter,
+    usingSampleData: Boolean
+): List<HomeActivity> {
+    val currentUserId = com.example.damandroid.auth.UserSession.user?.id
+    
+    return when (filter) {
+        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.MINE -> {
+            // Filtrer les activités créées par l'utilisateur connecté
+            if (currentUserId != null && currentUserId.isNotBlank()) {
+                // Filtrer en comparant les IDs (comparaison exacte)
+                activities.filter { activity ->
+                    activity.hostId != null && activity.hostId == currentUserId
+                }
+            } else {
+                emptyList() // Pas d'utilisateur connecté, pas d'activités "Mine"
+            }
+        }
+        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.COACH -> {
+            // Données statiques pour Coach (toujours statiques, pas depuis le backend)
+            sampleCoachActivities
+        }
+        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.INDIVIDUAL -> {
+            // Activités dynamiques depuis le backend (toutes les activités du backend)
+            activities
+        }
+    }
+}
+
+/**
+ * Composant pour les filtres d'activité (Mine, Coach, Individual)
+ */
+@Composable
+private fun ActivityTypeFilterRow(
+    selectedFilter: com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter,
+    onFilterChange: (com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter) -> Unit,
+    appColors: AppThemeColors,
+    cardSurface: Color,
+    cardBorder: Color,
+    titleColor: Color,
+    subtitleColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(cardSurface)
+            .border(1.dp, cardBorder, RoundedCornerShape(20.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.values().forEach { filter ->
+            val isSelected = filter == selectedFilter
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onFilterChange(filter) },
+                shape = RoundedCornerShape(16.dp),
+                color = if (isSelected) {
+                    appColors.accentPurple.copy(alpha = if (appColors.isDark) 0.3f else 0.2f)
+                } else {
+                    Color.Transparent
+                },
+                border = BorderStroke(
+                    width = if (isSelected) 2.dp else 0.dp,
+                    color = if (isSelected) appColors.accentPurple else Color.Transparent
+                )
+            ) {
+                Text(
+                    text = when (filter) {
+                        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.MINE -> "Mine"
+                        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.COACH -> "Coach"
+                        com.example.damandroid.presentation.homefeed.model.ActivityTypeFilter.INDIVIDUAL -> "Individual"
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) appColors.accentPurple else subtitleColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Données statiques pour les activités Coach
+ */
+private val sampleCoachActivities = listOf(
+    HomeActivity(
+        id = "coach-1",
+        title = "Morning lap swimming at City Pool",
+        sportType = "Swimming",
+        sportIcon = "🏊",
+        hostName = "Sarah Mitchell",
+        hostAvatar = "https://i.ibb.co/xSxQ1Ljf/profile-jpg.png",
+        date = "Nov 2, 2025",
+        time = "7:00 AM",
+        location = "City Aquatic Center",
+        distance = "0.8 mi",
+        spotsTotal = 5,
+        spotsTaken = 3,
+        level = "Intermediate",
+        isSaved = false
+    ),
+    HomeActivity(
+        id = "coach-2",
+        title = "Professional Basketball Training",
+        sportType = "Basketball",
+        sportIcon = "🏀",
+        hostName = "Coach Johnson",
+        hostAvatar = "",
+        date = "Nov 5, 2025",
+        time = "6:00 PM",
+        location = "Sports Complex",
+        distance = "1.5 mi",
+        spotsTotal = 8,
+        spotsTaken = 5,
+        level = "Advanced",
+        isSaved = false
+    ),
+    HomeActivity(
+        id = "coach-3",
+        title = "Yoga & Meditation Session",
+        sportType = "Yoga",
+        sportIcon = "🧘",
+        hostName = "Emma Wilson",
+        hostAvatar = "",
+        date = "Nov 3, 2025",
+        time = "9:00 AM",
+        location = "Wellness Center",
+        distance = "0.3 mi",
+        spotsTotal = 12,
+        spotsTaken = 8,
+        level = "Beginner",
+        isSaved = false
+    )
+)
 
 private val sampleHomeActivities = listOf(
     HomeActivity(

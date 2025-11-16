@@ -6,5 +6,6 @@ interface NotificationsRepository {
     suspend fun getNotifications(): NotificationsOverview
     suspend fun markAsRead(notificationId: String)
     suspend fun markAllAsRead()
+    suspend fun likeBack(profileId: String): Boolean // Retourne true si c'est un match
 }
 

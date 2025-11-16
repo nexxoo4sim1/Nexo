@@ -67,5 +67,9 @@ class ChatListViewModel(
             }
         }
     }
+
+    fun refresh() {
+        loadChats()
+    }
 }
 

@@ -18,5 +18,8 @@ class NotificationsRepositoryImpl(
     override suspend fun markAllAsRead() {
         remoteDataSource.markAllAsRead()
     }
+
+    override suspend fun likeBack(profileId: String): Boolean =
+        remoteDataSource.likeBack(profileId)
 }
 

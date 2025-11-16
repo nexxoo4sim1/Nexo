@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 import com.example.damandroid.domain.model.DiscoverOverview
 import com.example.damandroid.domain.model.DiscoverSportCategory
 import com.example.damandroid.domain.model.DiscoverUser
@@ -76,6 +77,7 @@ fun DiscoverRoute(
     viewModel: DiscoverViewModel,
     onBack: (() -> Unit)? = null,
     onCoachClick: ((String) -> Unit)? = null,
+    onChatClick: ((String, String, String?, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -83,6 +85,8 @@ fun DiscoverRoute(
         state = uiState,
         onBack = onBack,
         onCoachClick = onCoachClick,
+        onChatClick = onChatClick,
+        onCategorySelected = viewModel::onCategorySelected,
         onRefresh = viewModel::refresh,
         onSearchQueryChange = viewModel::onSearchQueryChange,
         modifier = modifier
@@ -94,6 +98,8 @@ fun DiscoverScreen(
     state: DiscoverUiState,
     onBack: (() -> Unit)?,
     onCoachClick: ((String) -> Unit)?,
+    onChatClick: ((String, String, String?, Boolean) -> Unit)?,
+    onCategorySelected: (String?) -> Unit,
     onRefresh: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -104,6 +110,9 @@ fun DiscoverScreen(
         state.overview != null -> DiscoverContent(
             overview = state.overview,
             searchQuery = state.searchQuery,
+            selectedCategory = state.selectedCategory,
+            onCategorySelected = onCategorySelected,
+            onChatClick = onChatClick,
             onSearchQueryChange = onSearchQueryChange,
             onBack = onBack,
             onCoachClick = onCoachClick,
@@ -151,6 +160,9 @@ private fun ErrorState(
 private fun DiscoverContent(
     overview: DiscoverOverview,
     searchQuery: String,
+    selectedCategory: String?,
+    onCategorySelected: (String?) -> Unit,
+    onChatClick: ((String, String, String?, Boolean) -> Unit)?,
     onSearchQueryChange: (String) -> Unit,
     onBack: (() -> Unit)?,
     onCoachClick: ((String) -> Unit)?,
@@ -162,8 +174,15 @@ private fun DiscoverContent(
     val filteredCategories = overview.sportCategories.filter {
         searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true)
     }
-    val filteredActivities = overview.trendingActivities.filter {
-        searchQuery.isBlank() || it.title.contains(searchQuery, ignoreCase = true)
+    val selectedIcon = selectedCategory?.let { name ->
+        overview.sportCategories.find { it.name.equals(name, ignoreCase = true) }?.icon
+    }
+    val filteredActivities = overview.trendingActivities.filter { activity ->
+        val searchMatch = searchQuery.isBlank() || activity.title.contains(searchQuery, ignoreCase = true)
+        val categoryMatch = selectedCategory == null ||
+                activity.title.contains(selectedCategory, ignoreCase = true) ||
+                (selectedIcon != null && activity.sportIcon == selectedIcon)
+        searchMatch && categoryMatch
     }
     val filteredUsers = overview.activeUsers.filter {
         searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true)
@@ -205,16 +224,24 @@ private fun DiscoverContent(
                 }
 
                 item {
-                    SportCategoriesSection(categories = filteredCategories, colors = colors)
+                    SportCategoriesSection(
+                        categories = filteredCategories,
+                        colors = colors,
+                        selectedCategory = selectedCategory,
+                        onCategorySelected = onCategorySelected
+                    )
                 }
 
                 item {
-                    TrendingActivitiesSection(activities = filteredActivities, colors = colors)
+                    TrendingActivitiesSection(
+                        activities = filteredActivities,
+                        colors = colors,
+                        onChatNow = { activityId, title ->
+                            launchChatForActivity(activityId, title, onChatClick)
+                        }
+                    )
                 }
-
-                item {
-                    ActiveUsersSection(users = filteredUsers, colors = colors)
-                }
+                // Removed "Active Now" section per request
             }
         }
     }
@@ -440,7 +467,12 @@ private fun FeaturedCoachCard(
 }
 
 @Composable
-private fun SportCategoriesSection(categories: List<DiscoverSportCategory>, colors: AppThemeColors) {
+private fun SportCategoriesSection(
+    categories: List<DiscoverSportCategory>,
+    colors: AppThemeColors,
+    selectedCategory: String?,
+    onCategorySelected: (String?) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Browse by Sport", colors)
         if (categories.isEmpty()) {
@@ -456,6 +488,10 @@ private fun SportCategoriesSection(categories: List<DiscoverSportCategory>, colo
                             SportCategoryCard(
                                 category = category,
                                 colors = colors,
+                                isSelected = selectedCategory?.equals(category.name, ignoreCase = true) == true,
+                                onClick = {
+                                    onCategorySelected(category.name)
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -475,6 +511,8 @@ private fun SportCategoriesSection(categories: List<DiscoverSportCategory>, colo
 private fun SportCategoryCard(
     category: DiscoverSportCategory,
     colors: AppThemeColors,
+    isSelected: Boolean = false,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val categoryColor = parseHexOrDefault(category.colorHex, colors.accentPurple)
@@ -499,10 +537,11 @@ private fun SportCategoryCard(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(96.dp),
+                .height(96.dp)
+                .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = colors.glassSurface),
-            border = BorderStroke(2.dp, colors.glassBorder),
+            border = BorderStroke(2.dp, if (isSelected) colors.accentPurple else colors.glassBorder),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(
@@ -537,7 +576,11 @@ private fun SportCategoryCard(
 }
 
 @Composable
-private fun TrendingActivitiesSection(activities: List<TrendingActivity>, colors: AppThemeColors) {
+private fun TrendingActivitiesSection(
+    activities: List<TrendingActivity>,
+    colors: AppThemeColors,
+    onChatNow: (String, String) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Trending Near You", colors)
         if (activities.isEmpty()) {
@@ -545,7 +588,11 @@ private fun TrendingActivitiesSection(activities: List<TrendingActivity>, colors
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 activities.forEach { activity ->
-                    TrendingActivityCard(activity = activity, colors = colors)
+                    TrendingActivityCard(
+                        activity = activity,
+                        colors = colors,
+                        onChatNow = { onChatNow(activity.id, activity.title) }
+                    )
                 }
             }
         }
@@ -553,7 +600,11 @@ private fun TrendingActivitiesSection(activities: List<TrendingActivity>, colors
 }
 
 @Composable
-private fun TrendingActivityCard(activity: TrendingActivity, colors: AppThemeColors) {
+private fun TrendingActivityCard(
+    activity: TrendingActivity,
+    colors: AppThemeColors,
+    onChatNow: (() -> Unit)? = null
+) {
     Box {
         Box(
             modifier = Modifier
@@ -646,18 +697,59 @@ private fun TrendingActivityCard(activity: TrendingActivity, colors: AppThemeCol
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = colors.subtleSurface,
-                    border = BorderStroke(2.dp, colors.glassBorder)
-                ) {
-                    Text(
-                        text = "${activity.maxParticipants - activity.participants} spots",
-                        fontSize = 12.sp,
-                        color = colors.success,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
+                Column(horizontalAlignment = Alignment.End) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = colors.subtleSurface,
+                        border = BorderStroke(2.dp, colors.glassBorder)
+                    ) {
+                        Text(
+                            text = "${activity.maxParticipants - activity.participants} spots",
+                            fontSize = 12.sp,
+                            color = colors.success,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { onChatNow?.invoke() },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPurple),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Chat Now",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.iconOnAccent
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun launchChatForActivity(
+    activityId: String,
+    activityTitle: String,
+    onChatClick: ((String, String, String?, Boolean) -> Unit)?
+) {
+    // Reuse the ActivityRoom flow (join then create/get group chat)
+    kotlinx.coroutines.GlobalScope.launch {
+        val repository = com.example.damandroid.api.ActivityRoomRepository()
+        val joinResult = repository.joinActivity(activityId)
+        when (joinResult) {
+            is com.example.damandroid.api.ActivityRoomRepository.ActivityRoomResult.Success,
+            is com.example.damandroid.api.ActivityRoomRepository.ActivityRoomResult.Error -> {
+                // Proceed even if already participant
+                when (val chatResult = repository.createOrGetActivityGroupChat(activityId)) {
+                    is com.example.damandroid.api.ActivityRoomRepository.ActivityRoomResult.Success -> {
+                        val chat = chatResult.data.chat
+                        onChatClick?.invoke(chat.id, chat.groupName, chat.groupAvatar, chat.isGroup)
+                    }
+                    else -> { /* ignore errors here for brevity */ }
                 }
             }
         }

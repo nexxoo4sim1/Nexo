@@ -47,6 +47,19 @@ private fun NotificationDto.toDomain(): NotificationItem {
             badgeIcon = metadata["badgeIcon"].orEmpty()
         )
 
+        "like" -> NotificationItem.LikeNotification(
+            id = id,
+            title = title,
+            message = message,
+            timestamp = timestamp,
+            isRead = isRead,
+            fromUserId = metadata["fromUserId"].orEmpty(),
+            fromUserName = metadata["fromUserName"].orEmpty(),
+            fromUserAvatar = metadata["fromUserAvatar"],
+            isMatch = metadata["isMatch"]?.toBoolean() ?: false,
+            matchId = metadata["matchId"]
+        )
+
         else -> NotificationItem.SystemMessage(
             id = id,
             title = title,

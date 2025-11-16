@@ -62,13 +62,22 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     
+    // Socket.IO for WebSocket
+    implementation("io.socket:socket.io-client:2.1.0")
+    
     // Google Sign-In
     implementation("com.google.android.gms:play-services-auth:21.0.0")
     
     // Facebook Login
     implementation("com.facebook.android:facebook-login:16.2.0")
+    
+    // OSMDroid - Carte native Android gratuite (100% gratuit, utilise OpenStreetMap)
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
+    implementation("org.osmdroid:osmdroid-wms:6.1.18")
+    
     implementation(libs.androidx.compose.foundation.layout)
     implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.material3)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

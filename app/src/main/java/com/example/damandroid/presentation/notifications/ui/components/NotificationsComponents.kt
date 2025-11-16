@@ -66,6 +66,8 @@ fun NotificationsContent(
     onBack: (() -> Unit)?,
     onNotificationRead: (String) -> Unit,
     onMarkAllRead: () -> Unit,
+    onLikeBack: ((String) -> Unit)? = null,
+    onStartChat: ((String, String) -> Unit)? = null, // userId, userName
     modifier: Modifier = Modifier
 ) {
     val themeController = LocalThemeController.current
@@ -104,7 +106,9 @@ fun NotificationsContent(
                             item = item,
                             colors = colors,
                             onAction = { onNotificationRead(item.id) },
-                            onDismiss = { onNotificationRead(item.id) }
+                            onDismiss = { onNotificationRead(item.id) },
+                            onLikeBack = onLikeBack,
+                            onStartChat = onStartChat
                         )
                     }
                 }
@@ -145,11 +149,16 @@ private fun NotificationCard(
     item: NotificationItem,
     colors: AppThemeColors,
     onAction: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onLikeBack: ((String) -> Unit)? = null,
+    onStartChat: ((String, String) -> Unit)? = null
 ) {
     val icon = remember(item) { item.iconEmoji() }
     val actionText = remember(item) { item.actionLabel() }
     val timestamp = remember(item) { item.formattedTimestamp() }
+    
+    // Pour les notifications de likes
+    val likeNotification = if (item is NotificationItem.LikeNotification) item else null
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Box(
@@ -206,22 +215,93 @@ private fun NotificationCard(
                     }
                 }
 
-                if (actionText != null) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Button(
-                            onClick = onAction,
-                            modifier = Modifier.height(36.dp),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accentPurple),
-                            contentPadding = PaddingValues(horizontal = 20.dp)
+                // Afficher les boutons selon le type de notification
+                when {
+                    likeNotification != null -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = actionText,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = colors.iconOnAccent
-                                )
+                            if (likeNotification.isMatch) {
+                                // Si c'est un match, afficher "Welcome" et "Chat"
+                                Button(
+                                    onClick = {
+                                        onStartChat?.invoke(
+                                            likeNotification.fromUserId,
+                                            likeNotification.fromUserName
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.accentPurple),
+                                    contentPadding = PaddingValues(horizontal = 20.dp)
+                                ) {
+                                    Text(
+                                        text = "Chat",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.iconOnAccent
+                                    )
+                                }
+                                Button(
+                                    onClick = onAction,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.accentPink),
+                                    contentPadding = PaddingValues(horizontal = 20.dp)
+                                ) {
+                                    Text(
+                                        text = "Welcome",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White
+                                    )
+                                }
+                            } else {
+                                // Si ce n'est pas encore un match, afficher "Like Back"
+                                Button(
+                                    onClick = {
+                                        onLikeBack?.invoke(likeNotification.fromUserId)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.accentPurple),
+                                    contentPadding = PaddingValues(horizontal = 20.dp)
+                                ) {
+                                    Text(
+                                        text = "Like Back",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.iconOnAccent
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    actionText != null -> {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Button(
+                                onClick = onAction,
+                                modifier = Modifier.height(36.dp),
+                                shape = RoundedCornerShape(18.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.accentPurple),
+                                contentPadding = PaddingValues(horizontal = 20.dp)
+                            ) {
+                                Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = actionText,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.iconOnAccent
+                                    )
+                                }
                             }
                         }
                     }
@@ -291,6 +371,7 @@ private fun NotificationItem.iconEmoji(): String = when (this) {
     is NotificationItem.ActivityReminder -> "🏃"
     is NotificationItem.AchievementUnlocked -> badgeIcon
     is NotificationItem.SystemMessage -> "ℹ️"
+    is NotificationItem.LikeNotification -> if (isMatch) "💕" else "❤️"
 }
 
 private fun NotificationItem.actionLabel(): String? = when (this) {
@@ -298,6 +379,7 @@ private fun NotificationItem.actionLabel(): String? = when (this) {
     is NotificationItem.ActivityReminder -> "Join"
     is NotificationItem.AchievementUnlocked -> "View"
     is NotificationItem.SystemMessage -> null
+    is NotificationItem.LikeNotification -> null // Les boutons sont gérés directement dans le composant
 }
 
 private fun NotificationItem.formattedTimestamp(): String {

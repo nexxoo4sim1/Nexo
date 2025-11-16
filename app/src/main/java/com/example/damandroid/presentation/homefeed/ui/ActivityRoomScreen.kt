@@ -55,11 +55,14 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -77,9 +80,11 @@ import com.example.damandroid.domain.model.HomeActivity
 import com.example.damandroid.ui.theme.AppThemeColors
 import com.example.damandroid.ui.theme.LocalThemeController
 import com.example.damandroid.ui.theme.rememberAppThemeColors
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import androidx.compose.ui.text.style.TextAlign
+import java.time.Duration
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 @Composable
 fun ActivityRoomRoute(
@@ -91,14 +96,36 @@ fun ActivityRoomRoute(
 ) {
     val themeController = LocalThemeController.current
     val colors = rememberAppThemeColors(themeController.isDarkMode)
-    ActivityRoomScreen(
-        activity = activity,
-        colors = colors,
-        onBack = onBack,
-        onLeave = onLeave,
-        onMarkComplete = onMarkComplete,
-        modifier = modifier
-    )
+    val repository = remember { com.example.damandroid.api.ActivityRoomRepository() }
+    val viewModel = remember(activity.id) {
+        com.example.damandroid.presentation.homefeed.viewmodel.ActivityRoomViewModel(
+            activityId = activity.id,
+            repository = repository
+        )
+    }
+    val uiState by viewModel.uiState.collectAsState()
+    
+        ActivityRoomScreen(
+            activity = activity,
+            uiState = uiState,
+            colors = colors,
+            onBack = onBack,
+            onSendMessage = viewModel::sendMessage,
+            onSetTyping = viewModel::setTyping,
+            onJoinActivity = viewModel::joinActivity,
+            onLeave = {
+                viewModel.leaveActivity()
+                onLeave?.invoke()
+            },
+            onMarkComplete = if (viewModel.isCurrentUserHost()) {
+                {
+                    viewModel.completeActivity()
+                    onMarkComplete?.invoke()
+                }
+            } else null,
+            onRefresh = viewModel::refresh,
+            modifier = modifier
+        )
 }
 
 private enum class ActivityRoomTab(val label: String) {
@@ -108,20 +135,7 @@ private enum class ActivityRoomTab(val label: String) {
     Info("Info")
 }
 
-private data class ActivityChatMessage(
-    val id: String,
-    val sender: String,
-    val avatar: String,
-    val text: String,
-    val time: String
-)
-
-private data class ActivityParticipant(
-    val id: String,
-    val name: String,
-    val avatar: String,
-    val status: String
-)
+// Ces data classes sont maintenant dans ActivityRoomViewModel
 
 private data class ActivityInsight(
     val title: String,
@@ -135,41 +149,24 @@ private data class ActivityInsight(
 @Composable
 private fun ActivityRoomScreen(
     activity: HomeActivity,
+    uiState: com.example.damandroid.presentation.homefeed.viewmodel.ActivityRoomUiState,
     colors: AppThemeColors,
     onBack: () -> Unit,
+    onSendMessage: (String) -> Unit,
+    onSetTyping: (Boolean) -> Unit,
+    onJoinActivity: (() -> Unit)? = null,
     onLeave: (() -> Unit)?,
     onMarkComplete: (() -> Unit)?,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val spotsLeft = (activity.spotsTotal - activity.spotsTaken).coerceAtLeast(0)
     var selectedTab by remember { mutableStateOf(ActivityRoomTab.Chat) }
     var messageInput by remember { mutableStateOf("") }
-    val messages = remember(activity.id) {
-        mutableStateListOf(
-            ActivityChatMessage(
-                id = "host",
-                sender = activity.hostName,
-                avatar = activity.hostAvatar,
-                text = "Hey everyone! Looking forward to this session. Please arrive 5 minutes early.",
-                time = "10:30 AM"
-            ),
-            ActivityChatMessage(
-                id = "alex",
-                sender = "Alex Thompson",
-                avatar = "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex",
-                text = "Sounds great! What should I bring?",
-                time = "10:45 AM"
-            )
-        )
-    }
-    val participants = remember(activity.id) {
-        listOf(
-            ActivityParticipant(activity.id + "_host", activity.hostName, activity.hostAvatar, "Host"),
-            ActivityParticipant("alex", "Alex Thompson", "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex", "Joined"),
-            ActivityParticipant("emma", "Emma Davis", "https://api.dicebear.com/7.x/avataaars/svg?seed=Emma", "Joined"),
-            ActivityParticipant("mike", "Mike Johnson", "https://api.dicebear.com/7.x/avataaars/svg?seed=Mike", "Joined")
-        )
-    }
+    
+    // Utiliser les données du ViewModel
+    val messages = uiState.messages
+    val participants = uiState.participants
     val insights = remember(activity.id, colors.isDark) {
         listOf(
             ActivityInsight(
@@ -221,19 +218,31 @@ private fun ActivityRoomScreen(
 
     fun sendMessage() {
         val text = messageInput.trim()
-        if (text.isEmpty()) return
-        val formatter = DateTimeFormatter.ofPattern("h:mm a")
-        val now = LocalTime.now().format(formatter)
-        messages.add(
-            ActivityChatMessage(
-                id = System.currentTimeMillis().toString(),
-                sender = "You",
-                avatar = "https://api.dicebear.com/7.x/avataaars/svg?seed=You",
-                text = text,
-                time = now
-            )
-        )
+        if (text.isEmpty() || uiState.isSendingMessage) return
+        onSendMessage(text)
         messageInput = ""
+    }
+    
+    // Afficher l'erreur si présente
+    uiState.error?.let { error ->
+        LaunchedEffect(error) {
+            // Vous pouvez afficher un Snackbar ici si nécessaire
+        }
+    }
+    
+    // Détecter quand l'utilisateur tape pour l'indicateur de frappe
+    LaunchedEffect(messageInput) {
+        if (messageInput.isNotEmpty()) {
+            onSetTyping(true)
+            // Arrêter l'indicateur après 2 secondes d'inactivité
+            delay(2000)
+            // Vérifier si l'utilisateur a toujours du texte (pas de changement)
+            if (messageInput.isNotEmpty()) {
+                onSetTyping(false)
+            }
+        } else {
+            onSetTyping(false)
+        }
     }
 
     Box(
@@ -262,24 +271,78 @@ private fun ActivityRoomScreen(
         ) {
             ActivityRoomHeader(activity = activity, spotsLeft = spotsLeft, colors = colors, onBack = onBack)
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // Indicateur de connexion WebSocket
+            if (!uiState.isWebSocketConnected && !uiState.isLoading) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (colors.isDark) 
+                            colors.warning.copy(alpha = 0.2f) 
+                        else 
+                            Color(0xFFFFF3CD)
+                    ),
+                    border = BorderStroke(1.dp, colors.warning.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = colors.warning,
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Connexion en cours... (Mode polling)",
+                            fontSize = 12.sp,
+                            color = colors.warning,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             ActivityTabRow(selectedTab = selectedTab, onTabSelected = { selectedTab = it }, colors = colors)
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Box(modifier = Modifier.weight(1f)) {
-                when (selectedTab) {
-                    ActivityRoomTab.Chat -> ChatTab(
-                        messages = messages,
-                        messageInput = messageInput,
-                        onMessageChange = { messageInput = it },
-                        onSend = ::sendMessage,
-                        colors = colors
-                    )
-                    ActivityRoomTab.People -> ParticipantsTab(participants = participants, colors = colors)
-                    ActivityRoomTab.AiTips -> InsightsTab(insights = insights, colors = colors)
-                    ActivityRoomTab.Info -> InfoTab(activity = activity, colors = colors)
+                when {
+                    uiState.isLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = colors.accentPurple)
+                        }
+                    }
+                    else -> {
+                        when (selectedTab) {
+                            ActivityRoomTab.Chat -> ChatTab(
+                                messages = messages,
+                                messageInput = messageInput,
+                                onMessageChange = { messageInput = it },
+                                onSend = ::sendMessage,
+                                isSending = uiState.isSendingMessage,
+                                typingUsers = uiState.typingUsers,
+                                colors = colors
+                            )
+                            ActivityRoomTab.People -> ParticipantsTab(participants = participants, colors = colors)
+                            ActivityRoomTab.AiTips -> InsightsTab(insights = insights, colors = colors)
+                            ActivityRoomTab.Info -> InfoTab(activity = activity, colors = colors)
+                        }
+                    }
                 }
             }
 
@@ -288,14 +351,41 @@ private fun ActivityRoomScreen(
             ActionButtons(
                 colors = colors,
                 onLeave = onLeave ?: onBack,
-                onMarkComplete = onMarkComplete
+                onMarkComplete = onMarkComplete,
+                isLeaving = uiState.isLeaving,
+                isCompleting = uiState.isCompleting
             )
         }
     }
 }
 
 @Composable
-private fun ActivityRoomHeader(activity: HomeActivity, spotsLeft: Int, colors: AppThemeColors, onBack: () -> Unit) {
+private fun ActivityRoomHeader(
+    activity: HomeActivity, 
+    spotsLeft: Int, 
+    colors: AppThemeColors, 
+    onBack: () -> Unit
+) {
+    // Calculer le temps restant jusqu'à l'activité
+    val timeUntilStart = remember(activity.date, activity.time) {
+        try {
+            // Parser la date et l'heure de l'activité
+            val dateTimeStr = "${activity.date}T${activity.time}"
+            val formatter = DateTimeFormatter.ISO_DATE_TIME
+            val activityDateTime = java.time.LocalDateTime.parse(dateTimeStr, formatter)
+            val now = java.time.LocalDateTime.now()
+            val duration = Duration.between(now, activityDateTime)
+            
+            when {
+                duration.isNegative -> "Started"
+                duration.toHours() < 1 -> "Starts in ${duration.toMinutes()} minutes"
+                duration.toHours() < 24 -> "Starts in ${duration.toHours()} hours"
+                else -> "Starts in ${duration.toDays()} days"
+            }
+        } catch (e: Exception) {
+            "Starts soon"
+        }
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
@@ -348,7 +438,7 @@ private fun ActivityRoomHeader(activity: HomeActivity, spotsLeft: Int, colors: A
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(imageVector = Icons.Filled.Schedule, contentDescription = null, tint = Color.White)
-                                Text(text = "Starts in 2 hours", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                                Text(text = timeUntilStart, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color.White)
                             }
                             Surface(shape = RoundedCornerShape(18.dp), color = if (colors.isDark) colors.cardSurface else Color.White) {
                                 Text(
@@ -418,13 +508,25 @@ private fun ActivityTabRow(selectedTab: ActivityRoomTab, onTabSelected: (Activit
 
 @Composable
 private fun ChatTab(
-    messages: List<ActivityChatMessage>,
+    messages: List<com.example.damandroid.presentation.homefeed.viewmodel.ActivityChatMessage>,
     messageInput: String,
     onMessageChange: (String) -> Unit,
     onSend: () -> Unit,
+    isSending: Boolean,
+    typingUsers: Map<String, Boolean>,
+    isParticipant: Boolean = true,
+    onJoinActivity: (() -> Unit)? = null,
+    isJoining: Boolean = false,
     colors: AppThemeColors
 ) {
     val listState = rememberLazyListState()
+    
+    // Scroller automatiquement vers le bas quand un nouveau message arrive
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -469,6 +571,88 @@ private fun ChatTab(
                     }
                 }
             }
+            
+            // Afficher les utilisateurs qui tapent
+            if (typingUsers.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = colors.mutedText,
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "${typingUsers.size} utilisateur(s) en train de taper...",
+                            fontSize = 12.sp,
+                            color = colors.mutedText,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                    }
+                }
+            }
+            
+            // Afficher un message si l'utilisateur n'est pas participant
+            if (!isParticipant && messages.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 16.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (colors.isDark) colors.glassSurface else Color.White.copy(alpha = 0.6f)
+                        ),
+                        border = BorderStroke(1.dp, if (colors.isDark) colors.glassBorder else Color.White.copy(alpha = 0.6f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Rejoignez l'activité pour participer au chat",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.primaryText,
+                                textAlign = TextAlign.Center
+                            )
+                            if (onJoinActivity != null) {
+                                Button(
+                                    onClick = onJoinActivity,
+                                    enabled = !isJoining,
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = colors.accentPurple
+                                    )
+                                ) {
+                                    if (isJoining) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            color = Color.White,
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "Rejoindre l'activité",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Row(
@@ -482,9 +666,16 @@ private fun ChatTab(
                 value = messageInput,
                 onValueChange = onMessageChange,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(text = "Type a message...", fontSize = 13.sp, color = colors.mutedText) },
+                placeholder = { 
+                    Text(
+                        text = if (isParticipant) "Type a message..." else "Rejoignez l'activité pour envoyer des messages",
+                        fontSize = 13.sp, 
+                        color = colors.mutedText
+                    ) 
+                },
                 shape = CircleShape,
                 singleLine = true,
+                enabled = !isSending && isParticipant,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = if (colors.isDark) colors.glassSurface else Color.White.copy(alpha = 0.65f),
@@ -503,8 +694,18 @@ private fun ChatTab(
                     .background(Brush.linearGradient(listOf(Color(0xFFFF6B35), Color(0xFFF7931E)))),
                 contentAlignment = Alignment.Center
             ) {
-                IconButton(onClick = onSend) {
-                    Icon(imageVector = Icons.Filled.Send, contentDescription = "Send", tint = Color.White)
+                if (isSending) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White
+                    )
+                } else {
+                    IconButton(
+                        onClick = onSend, 
+                        enabled = messageInput.isNotBlank() && !isSending && isParticipant
+                    ) {
+                        Icon(imageVector = Icons.Filled.Send, contentDescription = "Send", tint = Color.White)
+                    }
                 }
             }
         }
@@ -512,7 +713,7 @@ private fun ChatTab(
 }
 
 @Composable
-private fun ParticipantsTab(participants: List<ActivityParticipant>, colors: AppThemeColors) {
+private fun ParticipantsTab(participants: List<com.example.damandroid.presentation.homefeed.viewmodel.ActivityParticipant>, colors: AppThemeColors) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 80.dp),
@@ -684,7 +885,13 @@ private fun DetailRow(icon: ImageVector, label: String, value: String, colors: A
 }
 
 @Composable
-private fun ActionButtons(colors: AppThemeColors, onLeave: () -> Unit, onMarkComplete: (() -> Unit)?) {
+private fun ActionButtons(
+    colors: AppThemeColors, 
+    onLeave: () -> Unit, 
+    onMarkComplete: (() -> Unit)?,
+    isLeaving: Boolean = false,
+    isCompleting: Boolean = false
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -698,9 +905,17 @@ private fun ActionButtons(colors: AppThemeColors, onLeave: () -> Unit, onMarkCom
                 .height(48.dp),
             shape = RoundedCornerShape(24.dp),
             colors = ButtonDefaults.outlinedButtonColors(containerColor = if (colors.isDark) colors.glassSurface else Color.White.copy(alpha = 0.6f)),
-            border = BorderStroke(1.dp, if (colors.isDark) colors.glassBorder else Color.White.copy(alpha = 0.7f))
+            border = BorderStroke(1.dp, if (colors.isDark) colors.glassBorder else Color.White.copy(alpha = 0.7f)),
+            enabled = !isLeaving && !isCompleting
         ) {
-            Text(text = "Leave", fontSize = 13.sp, color = colors.primaryText)
+            if (isLeaving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = colors.primaryText
+                )
+            } else {
+                Text(text = "Leave", fontSize = 13.sp, color = colors.primaryText)
+            }
         }
         Box(
             modifier = Modifier
@@ -714,9 +929,17 @@ private fun ActionButtons(colors: AppThemeColors, onLeave: () -> Unit, onMarkCom
                 onClick = { onMarkComplete?.invoke() },
                 modifier = Modifier.fillMaxSize(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(24.dp),
+                enabled = !isLeaving && !isCompleting && onMarkComplete != null
             ) {
-                Text(text = "Mark Complete", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                if (isCompleting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White
+                    )
+                } else {
+                    Text(text = "Mark Complete", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                }
             }
         }
     }
