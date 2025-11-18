@@ -58,6 +58,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.damandroid.location.RouteService
 import com.example.damandroid.location.RouteEstimate
+import com.google.android.gms.maps.MapView
 
 /**
  * Composable pour afficher une carte OpenStreetMap native (100% gratuit)
